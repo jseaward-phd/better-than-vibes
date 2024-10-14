@@ -12,6 +12,3 @@ from sklearn.neighbors import (
 )  # pass weights = "distance" # coerce into scklearn-style set,
 
 from data import Img_Vec_Dataset
-
-
-## 

@@ -11,9 +11,7 @@ import numpy as np
 import pandas as pd
 from math import floor, ceil
 from tqdm import tqdm, trange
-
-
-import skimage as ski  # use ski.io.imread, ski.util.img_as_ubyte, ski.transform.resize
+import skimage as ski
 
 # import joblib # for parallel saving and loading of dicts?
 
