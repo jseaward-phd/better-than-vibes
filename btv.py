@@ -8,6 +8,7 @@ Created on Tue Oct  1 17:48:54 2024
 import argparse
 
 from sklearn.neighbors import (
+    NearestNeighbors,
     KNeighborsClassifier,
 )  # pass weights = "distance" # coerce into scklearn-style set,
 
