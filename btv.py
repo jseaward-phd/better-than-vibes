@@ -3,13 +3,10 @@
 """
 Created on Tue Oct  1 17:48:54 2024
 
-@author: rakshat
+@author: JSeaward
 """
 import argparse
 
-from sklearn.neighbors import (
-    NearestNeighbors,
-    KNeighborsClassifier,
-)  # pass weights = "distance" # coerce into scklearn-style set,
+from sklearn.neighbors import   NearestNeighbors, KNeighborsClassifier
 
-from data import Img_Vec_Dataset
+from data import Img_Obj_Dataset
