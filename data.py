@@ -24,6 +24,7 @@ from sklearn.neighbors import (
 # could even have subclaseses to make different "len()"?
 # what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
 
+# TODO: make torch vesion, make pretrained embedder version
 
 # sampling options set later
 class Img_Vec_Dataset:  # really only depents on the label convetion.... so shoulld make a general class that goes and gets the right label machinery
@@ -50,7 +51,7 @@ class Img_Vec_Dataset:  # really only depents on the label convetion.... so shou
         self.img_vec_channel_length = max_height * max_width
         self.classes, self.max_objs, self.obj_count = self._get_all_classes()
 
-        self.img_vec_set = ImageVectorSet(self)
+        self.whole_img_vec_set = ImageVectorSet(self)
         self.obj_vec_set = ObjectVectorSet(self)
 
     def _load_func(self, f, max_dim=None):
@@ -152,7 +153,8 @@ class YOLO_Labels:
         return obj_boxes, df
 
 
-class NearestVectorCaller:  # For datasets of vectors too big to fit in memmory. takes in a vector, returns n nearest in the underlying vec_set
+# For datasets of vectors too big to fit in memmory. takes in a vector, returns n nearest in the underlying vec_set
+class NearestVectorCaller:
     # damn! dont' actually need layers. Can always find an n that works
     def __init__(
         self,
@@ -167,11 +169,14 @@ class NearestVectorCaller:  # For datasets of vectors too big to fit in memmory.
     ):  # set random seed to None for a surprise!
         from sklearn.cluster import MiniBatchKMeans
 
-        self.out_path = out_path
-        self.in_path = in_path
-        self.f_name
-        self.tol = tol
         self.vec_set = vec_set  # something with a getitem function that returns vectors
+        self.in_path = in_path
+        self.out_path = out_path
+        self.random_seed = random_seed
+        self.batch_size = batch_size
+        self.max_iter = max_iter
+        self.tol = tol
+
         if n is None:
             self.n = int(len(self.vec_set) ** 0.5)
         else:
@@ -180,16 +185,17 @@ class NearestVectorCaller:  # For datasets of vectors too big to fit in memmory.
         if not os.path.isdir(os.path.split(self.out_path)[0]):
             os.makedirs(os.path.split(self.out_path)[0])
 
-        if in_path is not None:
+        if in_path is None:
             self.index_kmeans = MiniBatchKMeans(
                 n_clusters=self.n,
                 random_state=self.random_seed,
-                batch_size=batch_size,
-                max_iter=max_iter,
-            ).fit(vec_set)
-            pickle.dump(self.index_kmeans, os.path.join(self.f_path, self.f_name))
+                batch_size=self.batch_size,
+                max_iter=self.max_iter,
+            ).fit(vec_set.X)
+            if self.out_path is not None:
+                pickle.dump(self.index_kmeans, open(self.out_path, "wb"))
         else:
-            self.index_kmeans = pickle.load(open(self.in_path))
+            self.index_kmeans = pickle.load(open(self.in_path, "rb"))
 
         self.index_dict = {
             k: np.where(self.index_kmeans.labels_ == k)[0]
@@ -197,19 +203,26 @@ class NearestVectorCaller:  # For datasets of vectors too big to fit in memmory.
         }
 
     ### can use kmeans.transform om the vector to see it it is close to multiple centers, since that returns distances
-    def get_knn(self, vec, k=None):
-
+    def get_knn(self, vec, k=None, tol=None):
+        if len(vec.shape) < 2:
+            vec = vec.reshape(1, -1)
+        if tol is None:
+            tol = self.tol
         keys_to_load = self.index_kmeans.predict(vec)
 
         distances = self.index_kmeans.transform(vec).squeeze()
         sorted_distances = np.sort(distances)
         rel_err = np.array([1 - sorted_distances[0] / x for x in sorted_distances[1:]])
-        close_sorted_idxs = np.where(rel_err < self.tol)[0] + 1
+        close_sorted_idxs = np.where(rel_err < tol)[0] + 1
 
         if len(close_sorted_idxs > 0):
-            close_idxs = np.where(distances == sorted_distances[close_sorted_idxs])[0]
+            close_idxs = np.array(
+                [
+                    np.where(distances == x)[0].item()
+                    for x in sorted_distances[close_sorted_idxs]
+                ]
+            )
             keys_to_load = np.append(keys_to_load, close_idxs)
-
         idxs_to_load = np.array([])
         for key in keys_to_load:
             idxs_to_load = np.append(idxs_to_load, self.index_dict[key])
@@ -220,10 +233,11 @@ class NearestVectorCaller:  # For datasets of vectors too big to fit in memmory.
             return outX, outY
 
         else:
-            k = int(len(self.vec_set) / self.n)
+            if k is None:
+                k = int(len(self.vec_set) / self.n)
             nn = NearestNeighbors(n_neighbors=k).fit(outX)
             _, out_idxs = nn.kneighbors(vec)  ### Could return distance
-            return self._call_vec_set(out_idxs.squeeze())
+            return self._call_vec_set(out_idxs.squeeze(0))
 
     def _call_vec_set(self, idx_list):
         outX, outY = [], []
@@ -233,6 +247,7 @@ class NearestVectorCaller:  # For datasets of vectors too big to fit in memmory.
             outX.append(x)
             outY.append(y)
         return np.stack(outX), np.stack(outY)
+        # could .squeeze(0) here but that might make it less compatible
 
 
 class VecGetter:
