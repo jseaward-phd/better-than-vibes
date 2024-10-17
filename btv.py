@@ -8,7 +8,7 @@ Created on Tue Oct  1 17:48:54 2024
 import argparse
 
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
-from sklearn.metrics import accuracy_scorepdb
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import (
     train_test_split, # can just train/test split np.arange(len(ds)) to get back indeces for large sets
     StratifiedKFold,  # use X = np.zeros(n_samples) in .split
