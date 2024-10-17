@@ -26,7 +26,7 @@ from sklearn.neighbors import (
 #    3.) import joblib # for parallel saving and loading?
 
 # sampling options set later
-# %% Over-arching dataset classes. E.g. image sets for object detection, tabular classification sets, etc
+# %% Over-arching task-specific dataset classes. E.g. image sets for object detection, tabular classification sets, etc
 
 
 # may want to make a flag to save processed data arrays
@@ -300,6 +300,7 @@ class VecGetter:
         return len(self.vec_set)
 
 
+### TODO: a yolo v8 preprocess IVS
 class ImageVectorSet:
     def __init__(self, dataset):
         """
@@ -349,8 +350,19 @@ class ImageVectorSet:
             return self.image_vector_and_binary_label(idx)
         elif isinstance(idx, slice):
             holder_vecs, holder_labs = [], []
+            if idx.start is None:
+                start = 0
+            elif idx.start == -1:
+                start = len(self)
+            else:
+                start = idx.stat
+            if idx.stop is None or idx.stop == -1:
+                stop = len(self)
+            else:
+                stop = idx.stop
+            stop = idx.stop if idx.stop is not None else len(self)
             step = idx.step if idx.step is not None else 1
-            for i in range(idx.start, idx.stop, step):
+            for i in range(start, stop, step):
                 vec, labs = self.image_vector_and_binary_label(i)
                 holder_vecs.append(vec)
                 holder_labs.append(labs)
@@ -420,6 +432,7 @@ class NearestVectorCaller:
         batch_size: int = 1024,
         max_iter: int = 100,
         tol: float = 0.01,
+        verbose: int = 1,
     ):
         """
         For doing knn on datasets whose vectors will not all fit in memory.
@@ -438,7 +451,7 @@ class NearestVectorCaller:
             i.e. compute from scratch.
         out_path : str, optional
             Path to save computed kmeans object. The default is "./lg_vec_index.pkl".
-        metric : str, optional. The default is "minkowski"
+        metric : str or callable, optional. The default is "minkowski"
             Distance metric for nearest neghbor calculation. Try "cosine."
             See sklearn.neighbors.NearestNeighbors for more
         n : int, optional
@@ -456,6 +469,9 @@ class NearestVectorCaller:
             terms of the maximum on the ratio of how much further the index
             under consideration is to distance to the closest index vector.
             The default is 0.01.
+        verbose : int, optional
+            Verbosity of the minibatch kmeans fitter. The default is 1.
+            Set to 0 for silent.
 
         Returns
         -------
@@ -488,6 +504,7 @@ class NearestVectorCaller:
                 random_state=self.random_seed,
                 batch_size=self.batch_size,
                 max_iter=self.max_iter,
+                verbose=1,
             ).fit(vec_set.X)
             if self.out_path is not None:
                 pickle.dump(self.index_kmeans, open(self.out_path, "wb"))
@@ -522,51 +539,83 @@ class NearestVectorCaller:
             k nearest vectors from the dataset.
         array
             Labels of those k nearest vectors.
-
+        array
+            Indeces in the vector dataset of the k nearest neighbors.
         """
         if len(vec.shape) < 2:
             vec = vec.reshape(1, -1)
         if tol is None:
             tol = self.tol
         keys_to_load = self.index_kmeans.predict(vec)
+        keys_to_load_set = set(keys_to_load)
 
-        distances = self.index_kmeans.transform(vec).squeeze()
+        distances = self.index_kmeans.transform(vec)
         sorted_distances = np.sort(distances)
-        rel_err = np.array([1 - sorted_distances[0] / x for x in sorted_distances[1:]])
-        close_sorted_idxs = np.where(rel_err < tol)[0] + 1
-
-        if len(close_sorted_idxs > 0):
-            close_idxs = np.array(
+        rel_err = 1 - sorted_distances[:, 0].reshape([-1, 1]) / sorted_distances[:, 1:]
+        a, b = np.where(rel_err < tol)
+        keys_to_load_set = keys_to_load_set.union(
+            set(
                 [
-                    np.where(distances == x)[0].item()
-                    for x in sorted_distances[close_sorted_idxs]
+                    np.where(distances[x] == sorted_distances[x, y])[0].item()
+                    for x, y in zip(a, b)
                 ]
             )
-            keys_to_load = np.append(keys_to_load, close_idxs)
-        idxs_to_load = np.array([])
-        for key in keys_to_load:
-            idxs_to_load = np.append(idxs_to_load, self.index_dict[key])
+        )
 
+        ## vvvvvv old way with loops
+        # close_sorted_idxs = []
+        # for x in rel_err:
+        #     a = np.where(x < tol)[0] + 1
+        #     if len(a) == 0:
+        #         close_sorted_idxs.append(0)
+        #     else:
+        #         close_sorted_idxs.append(a)
+
+        # for i, sorted_idx in enumerate(close_sorted_idxs):
+        #     if isinstance(sorted_idx,int):
+        #         continue
+        #     else:
+        #         close_idxs = np.array(
+        #     [
+        #         np.where(distances[i] == x)[0]
+        #         for x in sorted_distances[i,sorted_idx]
+        #     ])
+        #         keys_to_load_set = keys_to_load_set.union(set(close_idxs.squeeze()))
+
+        idxs_to_load = np.array([])
+        for key in keys_to_load_set:
+            idxs_to_load = np.append(idxs_to_load, self.index_dict[key])
+        # assert False
         outX, outY = self._call_vec_set(idxs_to_load)
 
-        if k is None and len(keys_to_load) == 1:
-            return outX, outY
+        if k is None and len(keys_to_load_set) == 1:
+            return outX, outY, idxs_to_load
 
         else:
             if k is None:
                 k = int(len(self.vec_set) / self.n)
+
             nn = NearestNeighbors(n_neighbors=k, metric=self.metric).fit(outX)
             _, out_idxs = nn.kneighbors(vec)  ### Could return distance
-            return self._call_vec_set(out_idxs.squeeze(0))
+            outX, outY = self._call_vec_set(out_idxs)
+            return outX, outY, out_idxs
 
-    def _call_vec_set(self, idx_list):
+    def _call_vec_set(self, idx_RA):
+        if len(idx_RA.shape) < 2:
+            idx_RA = idx_RA.reshape([1, -1])
         outX, outY = [], []
-        for idx in idx_list:
-            x, y = self.vec_set[int(idx)]
-            assert x is not None
-            outX.append(x)
-            outY.append(y)
-        return np.stack(outX), np.stack(outY)
+        for idx_list in idx_RA:
+            for idx in idx_list:
+                x, y = self.vec_set[int(idx)]
+                assert x is not None
+                outX.append(x)
+                outY.append(y)
+        outX = np.stack(outX)
+        outY = np.stack(outY)
+        _, unique_idx = np.unique(outX, axis=0, return_index=True)
+        outX = outX[sorted(unique_idx)]
+        outY = outY[sorted(unique_idx)]
+        return outX, outY
         # could .squeeze(0) here but that might make it less compatible
 
 
