@@ -77,7 +77,7 @@ class Img_Obj_Dataset:
         self.classes, self.max_objs, self.obj_count = self._get_all_classes()
 
         self.whole_img_vec_set = ImageVectorSet(self)
-        self.obj_vec_set = ObjectVectorSet(self)
+        # self.obj_vec_set = ObjectVectorSet(self)
 
     def _load_func(self, f: str, max_dim: int = None):
         """
@@ -301,15 +301,19 @@ class VecGetter:
 
 
 ### TODO: a yolo v8 preprocess IVS
-class ImageVectorSet:
-    def __init__(self, dataset):
+class VectorDataSet:
+    def __init__(self, dataset, getY: bool = True):
         """
-        Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
+        Vector Dataset superclass. For individual kinds of vectors, use a subclass
+        with a specific getvec_fn
 
         Parameters
         ----------
         dataset : Dataset with a scikit image collection as .imc
             Dataset to wrap.
+        getY : bool, optional
+            Construct the full labl set and add as self.y. The defaulst is True.
+            Set to false for truly massive datasets.
 
         Returns
         -------
@@ -318,8 +322,62 @@ class ImageVectorSet:
         """
         self.dataset = dataset  # the superior Img Vec Dataset
         self.X = VecGetter(self)
+        if getY:
+            self.y = self._get_y()
 
-    def image_vector_and_binary_label(self, idx: int):
+    def __getitem__(self, idx):
+        if isinstance(idx, int):
+            return self.getvec_fn(idx)
+        elif isinstance(idx, slice):
+            holder_vecs, holder_labs = [], []
+            if idx.start is None:
+                start = 0
+            elif idx.start == -1:
+                start = len(self)
+            else:
+                start = idx.start
+            if idx.stop is None or idx.stop == -1:
+                stop = len(self)
+            else:
+                stop = idx.stop
+            stop = idx.stop if idx.stop is not None else len(self)
+            step = idx.step if idx.step is not None else 1
+            for i in range(start, stop, step):
+                vec, labs = self.getvec_fn(i)
+                holder_vecs.append(vec)
+                holder_labs.append(labs)
+            return np.stack(holder_vecs), np.stack(holder_labs)
+        elif isinstance(idx, (list,np.ndarray)):
+            holder_vecs, holder_labs = [], []
+            for i in idx:
+                vec, labs = self.getvec_fn(i)
+                holder_vecs.append(vec)
+                holder_labs.append(labs)
+            return np.stack(holder_vecs), np.stack(holder_labs)
+        else:
+            raise Exception("Prassed index is of unknown type.")
+            
+    def __len__(self):
+        return len(self.dataset.imc)
+
+    def _get_y(self):
+        all_labels = []
+        for idx in range(len(self)):
+            df = self.dataset.label_module.get_label_df(idx)
+            labs_binary = [0] * len(self.dataset.classes)
+            for label in set(df["class"]):
+                labs_binary[label] = 1
+            all_labels.append(labs_binary)
+        y = np.stack(all_labels)
+        return y
+
+
+class ImageVectorSet(VectorDataSet):
+    """
+    Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
+    """
+
+    def getvec_fn(self, idx: int):
         """
         Gets the image vector for the image indexed by idx in the attached dataset.
         Makes a binary label for vector of length == number of classes in the dataset.
@@ -345,54 +403,13 @@ class ImageVectorSet:
             labs_binary[label] = 1  # make binary vector for **presence** of object
         return np.array(im_vec), np.array(labs_binary)
 
-    def __getitem__(self, idx):
-        if isinstance(idx, int):
-            return self.image_vector_and_binary_label(idx)
-        elif isinstance(idx, slice):
-            holder_vecs, holder_labs = [], []
-            if idx.start is None:
-                start = 0
-            elif idx.start == -1:
-                start = len(self)
-            else:
-                start = idx.stat
-            if idx.stop is None or idx.stop == -1:
-                stop = len(self)
-            else:
-                stop = idx.stop
-            stop = idx.stop if idx.stop is not None else len(self)
-            step = idx.step if idx.step is not None else 1
-            for i in range(start, stop, step):
-                vec, labs = self.image_vector_and_binary_label(i)
-                holder_vecs.append(vec)
-                holder_labs.append(labs)
-            return np.stack(holder_vecs), np.stack(holder_labs)
 
-    def __len__(self):
-        return len(self.dataset.imc)
+class ObjectVectorSet((VectorDataSet)):
+    """
+    Not fully implimented. getting y doesn't work great since the length is different
+    """
 
-
-class ObjectVectorSet:
-    def __init__(self, dataset):
-        """
-        Vector Dataset for objects in images surrounded by bounding boxes. The idea
-        is to ensure that there is variety in objects depicted, not just scenes.
-        Meant to be a sub-module for datasets in this file.
-
-        Parameters
-        ----------
-        dataset : Dataset with a scikit image collection as .imc
-            Dataset to wrap.
-
-        Returns
-        -------
-        data vectors for objects and labels as (list, list) since the object vectors
-        can be of different sizes, depending on the size of the bounding box.
-
-        """
-        self.dataset = dataset
-
-    def get_obj_vectors(self, idx: int):
+    def getvec_fn(self, idx: int):
         ims = []
         labs = []
         for im, cl, loc in self.dataset.get_objects(idx):
@@ -401,18 +418,6 @@ class ObjectVectorSet:
             ims.append(im_vec)
             labs.append(cl)
         return ims, labs
-
-    def __getitem__(self, idx):
-        if isinstance(idx, int):
-            return self.get_obj_vectors(idx)
-        elif isinstance(idx, slice):
-            holder_vecs, holder_labs = [], []
-            step = idx.step if idx.step is not None else 1
-            for i in range(idx.start, idx.stop, step):
-                vecs, labs = self.get_obj_vectors(i)
-                holder_vecs += vecs
-                holder_labs += labs
-            return holder_vecs, holder_labs
 
     def __len__(self):
         return self.dataset.obj_count
@@ -516,7 +521,7 @@ class NearestVectorCaller:
             for k in sorted(self.index_kmeans.labels_)
         }
 
-    def get_knn(self, vec, k: int = None, tol: float = None):
+    def get_knn(self, vec, k: int = None, tol: float = None, return_vecs: bool = True):
         """
         Takes in a vector, returns n nearest in the underlying vec_set,
         even if it is near theboarder of multiple kmeans regions
@@ -532,13 +537,16 @@ class NearestVectorCaller:
             Tolerance for another index vector to be "close" and thus load its
             associated vectros from the dataset for knn calculation.
             The default is None, which uses the .tol from the caller (default of 1%).
+        return_vecs : bool, optional
+            Whether or not to return the actural vectors. The defaul is True.
+            Setting to False will return indeces only.
 
         Returns
         -------
         array
-            k nearest vectors from the dataset.
+            k nearest vectors from the dataset. Suppressed if return_vecs is False.
         array
-            Labels of those k nearest vectors.
+            Labels of those k nearest vectors. Suppressed if return_vecs is False.
         array
             Indeces in the vector dataset of the k nearest neighbors.
         """
@@ -562,34 +570,16 @@ class NearestVectorCaller:
             )
         )
 
-        ## vvvvvv old way with loops
-        # close_sorted_idxs = []
-        # for x in rel_err:
-        #     a = np.where(x < tol)[0] + 1
-        #     if len(a) == 0:
-        #         close_sorted_idxs.append(0)
-        #     else:
-        #         close_sorted_idxs.append(a)
-
-        # for i, sorted_idx in enumerate(close_sorted_idxs):
-        #     if isinstance(sorted_idx,int):
-        #         continue
-        #     else:
-        #         close_idxs = np.array(
-        #     [
-        #         np.where(distances[i] == x)[0]
-        #         for x in sorted_distances[i,sorted_idx]
-        #     ])
-        #         keys_to_load_set = keys_to_load_set.union(set(close_idxs.squeeze()))
-
         idxs_to_load = np.array([])
         for key in keys_to_load_set:
             idxs_to_load = np.append(idxs_to_load, self.index_dict[key])
-        # assert False
-        outX, outY = self._call_vec_set(idxs_to_load)
 
         if k is None and len(keys_to_load_set) == 1:
-            return outX, outY, idxs_to_load
+            if return_vecs:
+                outX, outY = self.call_vec_set(idxs_to_load)
+                return outX, outY, idxs_to_load
+            else:
+                return idxs_to_load
 
         else:
             if k is None:
@@ -597,10 +587,13 @@ class NearestVectorCaller:
 
             nn = NearestNeighbors(n_neighbors=k, metric=self.metric).fit(outX)
             _, out_idxs = nn.kneighbors(vec)  ### Could return distance
-            outX, outY = self._call_vec_set(out_idxs)
-            return outX, outY, out_idxs
+            if return_vecs:
+                outX, outY = self.call_vec_set(out_idxs)
+                return outX, outY, out_idxs
+            else:
+                return out_idxs
 
-    def _call_vec_set(self, idx_RA):
+    def call_vec_set(self, idx_RA):
         if len(idx_RA.shape) < 2:
             idx_RA = idx_RA.reshape([1, -1])
         outX, outY = [], []
@@ -616,7 +609,9 @@ class NearestVectorCaller:
         outX = outX[sorted(unique_idx)]
         outY = outY[sorted(unique_idx)]
         return outX, outY
-        # could .squeeze(0) here but that might make it less compatible
+
+    def get_knn_by_idx(self, idx_RA):
+        out_X, out_y = self.call_vec_set(idx_RA)
 
 
 # %% Utility Functions

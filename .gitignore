@@ -1,3 +1,5 @@
+__pycache__
 data/*
-*.pkl
 *~
+.ipynb_checkpoints/
+.virtual_documents/
