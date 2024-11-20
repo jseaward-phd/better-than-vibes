@@ -301,7 +301,7 @@ class VecGetter:
 
 
 ### TODO: a yolo v8 preprocess IVS
-class VectorDataSet:
+class ImageVectorDataSet:
     def __init__(self, dataset, getY: bool = True):
         """
         Vector Dataset superclass. For individual kinds of vectors, use a subclass
@@ -372,7 +372,7 @@ class VectorDataSet:
         return y
 
 
-class ImageVectorSet(VectorDataSet):
+class ImageVectorSet(ImageVectorDataSet):
     """
     Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
     """
@@ -404,7 +404,7 @@ class ImageVectorSet(VectorDataSet):
         return np.array(im_vec), np.array(labs_binary)
 
 
-class ObjectVectorSet((VectorDataSet)):
+class ObjectVectorSet(ImageVectorDataSet):
     """
     Not fully implimented. getting y doesn't work great since the length is different
     """
