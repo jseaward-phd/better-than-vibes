@@ -14,13 +14,13 @@ from tqdm import tqdm, trange
 import skimage as ski
 
 # when loading multiple batches, just spit out n closest
-from sklearn.neighbors import (
-    NearestNeighbors,
-)
+from sklearn.neighbors import  NearestNeighbors
 
 # what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
 
 # TODO:
+# %%
+#    0.) Re-do vectorizaation with umap. Can just make each image into a row vector (with padding) and make a umap reducer.
 #    1.) Make torch vesion
 #    2.) Mke pretrained embedder version (maybe this doesn't need a data structure, it will already have one.)
 #    3.) import joblib # for parallel saving and loading?
