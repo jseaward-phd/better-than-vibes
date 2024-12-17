@@ -65,15 +65,3 @@ def embedd_with_umap(df,embedding_dim = 10, metric='euclidean', scale=True):
     reducer.fit(data)
     return reducer
 
-def fit_dknn_toXy(X,y, k = 10, metric = 'euclidean'):
-    clf = KNeighborsClassifier(n_neighbors=k, metric=metric, weights='distance')
-    if isinstance(X,pd.Dataframe):
-        clf.fit(X.values,y)
-    else:
-        clf.fit(X,y)
-    return clf
-
-def fit_dknn_toUMAP_reducer(reducer, y_train, k = 10, metric = 'euclidean'):
-    clf = KNeighborsClassifier(n_neighbors=k, metric=metric, weights='distance')
-    clf.fit(reducer.embedding_, y_train)
-    return clf
