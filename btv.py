@@ -71,9 +71,10 @@ def prediction_info(y_true, y_predicted, discount_chance=True):  #for classifica
     if isinstance(y_predicted, list):
         y_predicted = np.stack(y_predicted, axis=1)
     A = []
+    classes = y_predicted.shape[1] - 1
     with np.errstate(divide="ignore"):
         for pred, true in zip(y_predicted, y_true):
-            I = -np.log(pred[true]/2+1/2) / np.log(2) if not discount_chance else -np.log(pred[true]+1/2) / np.log(2) # bits
+            I = -np.log(pred[true]/(2**classes)+1/(2**classes)) / np.log(2) if not discount_chance else -np.log(pred[true]+1/2**classes) / np.log(2)  # bits
             A.append(I)
     A = np.array(A)
     if discount_chance:
@@ -104,25 +105,66 @@ def cal_info_about_test_set_in_train_set(X_train,y_train, X_test, y_test, clf): 
     rel_info =  baseline_info - np.sum(prediction_info(y_test, clf2.predict_proba(X_test)))
     return rel_info
 
-def pick_train_set_knn(X_train, y_train, X_test, y_test, chunk_sz = None, margin=0.03):   #TODO: This
-    if chunk_sz is None:
-        chunk_sz = len(y_test)/100
+def pick_nearest2test(X_train, y_train, X_test, y_test):
     clf_knn = fit_dknn_toXy(X_train, y_train)
-    full_train_test_info = np.sum(prediction_info(y_test, clf_knn.predict_proba(X_test)))
-    # target = full_train_test_info(margin + 1)
-    print("Full training set leaves {full_train_test_info} bits in the test set. Trying select a smaller set within {margin*100:f3}%...")
+    full_train_test_info_residual = np.sum(prediction_info(y_test, clf_knn.predict_proba(X_test)))
 
     nn = NearestNeighbors(n_neighbors=1, metric="euclidean").fit(X_train)
     _, train0_idxs = nn.kneighbors(X_test)
     train0_idxs = train0_idxs.squeeze()
     clf_knn.fit(X_train[train0_idxs], y_train[train0_idxs])
-    # X_train_running, y_train_running = X[:chunk_sz], y_train[:chunk_sz]
-    # # clf_knn.fit(X_train_running, y_train_running)  # I think I can just compart it to the baseline full train info but not refitting the classifier. and doing the margin different. Should check with 
-    # # while small_train_test_info > target:. That will validate the theory
-    # small_train_test_info = cal_info_about(X_train_running, y_train_running y_test, clf_knn)
-    # while small_train_test_info/full_train_test_info > margin:
-    #     X_train_running = np.vstack([X_train_running, X[len(y_train_running):len(y_train_running)+chunk_sz,:]])
-    #     y_train_running = np.append(y_train_running, y_train[len(y_train_running):len(y_train_running)+chunk_sz])
+    selected_train_test_info_residual = np.sum(prediction_info(y_test, clf_knn.predict_proba(X_test)))
+    print("Info left in test set after training on full train set: ", full_train_test_info_residual, "Full training set size: ", len(y_train))
+    print(f"Info left in test set after training on {len(train0_idxs)} train set examples nearest to test set: ", selected_train_test_info_residual)
+    return train0_idxs
+
+def prune_training_set(X, y, test_idx = None, k = 10):
+    if test_idx is not None:
+        allidx = np.arange(X.shape[0])
+        trainidx = np.setdiff1d(allidx,test_idx)
+        X_train, y_train, X_test, y_test = X[train_idx], y[train_idx], X[test_idx], y[test_idx]
+        
+        tiny_x = np.vstack([X_train[:int((k+1)/2)+1],X_train[-(int((k+1)/2)+1):]])
+        tiny_y = np.append(y_train[:int((k+1)/2)+1],y_train[-(int((k+1)/2)+1):])
+        clf_knn = fit_dknn_toXy(tiny_x, tiny_y,k=k)  #fit an initial knn for whole train info estimation
+        
+        min_train_test_info_residual = np.sum(prediction_info(y_test, clf_knn.predict_proba(X_test)))
+        full_train_test_info = cal_info_about_test_set_in_train_set(X_train,y_train, X_test, y_test, clf_knn)
+        clf_knn.fit(X_train, y_train)
+        full_train_test_info_residual = np.sum(prediction_info(y_test, clf_knn.predict_proba(X_test)))
+        #TODO: More user-friendly names
+        print("full train set size: ", y_train.size)
+        print("full_train_test_info: ", full_train_test_info)
+        print("min_train_test_info_residual: ", min_train_test_info_residual)
+        print("full_train_test_info_residual: ", full_train_test_info_residual)
+        print("full train knn score: ", clf_knn.score(X_test,y_test))
+    else:
+        X_train, y_train = X, y
+    
+    clf_knn_selfdrop = KNeighborsClassifier(n_neighbors=100, metric='euclidean', weights=dist_weight_ignore_self) # TODO: optimize n_neighbors
+    clf_knn_selfdrop.fit(X_train, y_train)
+    sorted_X, sorted_y, info = order_samples_by_info(X_train,y_train,clf_knn_selfdrop, sort_info=False)
+
+    ##not sure this is meaningful:
+    train_self_info = np.sum(prediction_info(y_test, clf_knn_selfdrop.predict_proba(X_train)))
+    print("Train set self-info:", train_self_info)
+
+    if test_idx is not None:
+        sorted_X, sorted_y, info = order_samples_by_info(X_train,y_train,clf_knn_selfdrop, sort_info=False)
+        tiny_x = np.vstack([X_train[:int((k+1)/2)+1],X_train[-(int((k+1)/2)+1):]])
+        tiny_y = np.append(y_train[:int((k+1)/2)+1],y_train[-(int((k+1)/2)+1):])
+        clf_knn.fit(tiny_x, tiny_y)
+        self_pruned_train_test_info =  cal_info_about_test_set_in_train_set(X_train[info>0],y_train[info>0], X_test, y_test, clf_knn)
+        print("Self-pruned train set size: ", y_train[info>0].size)
+        print("self_pruned_train_test_info: ", self_pruned_train_test_info)
+        clf_knn.fit(X_train[info>0,:],y_train[info>0])
+        self_pruned_train_test_info_residual = np.sum(prediction_info(y_test, clf_knn.predict_proba(X_test)))
+        print("self_pruned_train_test_info_residual: ", self_pruned_train_test_info_residual)
+        print("self_pruned_score: ", clf_knn.score(X_test,y_test))
+
+    selected_training_mask = info>0
+    X_train_selected, y_train_selected = X_train[selected_training_mask,:], y_train[selected_training_mask,:]
+    return X_train_selected, y_train_selected, selected_training_mask
                                     
 def order_folds_by_entropy(X, y, clf, fold_idxs:list, reverse=True, info=False): # reverse = True sorts highest to lowest, so prioratize the training data that the model, as provided, knows the least about.
     Hs = []

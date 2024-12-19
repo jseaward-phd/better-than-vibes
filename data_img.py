@@ -13,6 +13,9 @@ from math import floor, ceil
 from tqdm import tqdm, trange
 import skimage as ski
 
+import torch
+from torchvision.transforms import v2
+
 # when loading multiple batches, just spit out n closest
 from sklearn.neighbors import  NearestNeighbors
 
@@ -68,6 +71,7 @@ class Img_Obj_Dataset:
 
         if max_dim is None:
             max_height, max_width = self._get_max_dims()
+            max_dim = max(max_height, max_width)
         else:
             max_height, max_width = max_dim, max_dim
             self.imc = ski.io.ImageCollection(
@@ -78,6 +82,12 @@ class Img_Obj_Dataset:
 
         self.whole_img_vec_set = ImageVectorSet(self)
         # self.obj_vec_set = ObjectVectorSet(self)
+        self.transforms = transforms = v2.Compose([
+                v2.ToImage(),
+                v2.Resize(None,max_size=max_dim), # should prolly do this with size on the short side. Use mean or beadian dim, prolly.
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(mean=[0.5479, 0.5197, 0.4716], std=[0.0498, 0.0468, 0.0421]),
+                ])
 
     def _load_func(self, f: str, max_dim: int = None):
         """
@@ -97,15 +107,16 @@ class Img_Obj_Dataset:
 
         """
         im = ski.io.imread(f)
-        if max_dim is not None:
-            aspect = im.shape[1] / im.shape[0]
-            if aspect > 1:  # short image
-                h = int(max_dim / aspect)
-                im = ski.transform.resize(im, [h, max_dim])
-            else:  # wide image
-                w = int(max_dim * aspect)
-                im = ski.transform.resize(im, [max_dim, w])
-        return ski.util.img_as_ubyte(im)
+        im = self.transforms(im).numpy().transpose([1,2,0])
+        # if max_dim is not None:
+        #     aspect = im.shape[1] / im.shape[0]
+        #     if aspect > 1:  # short image
+        #         h = int(max_dim / aspect)
+        #         im = ski.transform.resize(im, [h, max_dim])
+        #     else:  # wide image
+        #         w = int(max_dim * aspect)
+        #         im = ski.transform.resize(im, [max_dim, w])
+        return im
 
     def _get_max_dims(self):
         """
@@ -131,7 +142,7 @@ class Img_Obj_Dataset:
             if W > w:
                 w = W
         return H, W
-
+        
     def _get_all_classes(self):
         """
         Utility function to find all classes in the dataset.
