@@ -17,8 +17,10 @@ import torch
 from torchvision.transforms import v2
 import umap
 
+import cv2
+
 # when loading multiple batches, just spit out n closest
-from sklearn.neighbors import  NearestNeighbors
+from sklearn.neighbors import NearestNeighbors
 
 # what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
 
@@ -34,9 +36,9 @@ from sklearn.neighbors import  NearestNeighbors
 
 
 # may want to make a flag to save processed data arrays
-class Img_Obj_Dataset:
+class Img_VAE_Dataset:
     def __init__(
-        self, train_dir_path: str, max_dim: int = 256, label_type: str = "yolo"
+        self, train_dir_path: str, max_dim: int = None, label_type: str = "yolo"
     ):
         """
         Dataset for object detection in images using bounding boxes.
@@ -62,72 +64,65 @@ class Img_Obj_Dataset:
         self.trainpath = train_dir_path
         self.img_path = os.path.join(self.trainpath, "images/")  # could make suffix arg
         self.label_path = os.path.join(self.trainpath, "labels/")
+        self.max_dim = max_dim
         ## make different modules for differen label types
         if label_type == "yolo":
             self.label_module = YOLO_Labels(self)
-
-        self.imc = ski.io.ImageCollection(
-            self.img_path + "*", load_func=self._load_func
+        ## make load functions for different scenarios
+        meaans, stds = self._get_image_norm_params()
+        self._laod_func = (
+            torch_load_fn(dims=(max_dim, max_dim), means=means, stds=stds)
+            if max_dim is int
+            else torch_load_fn(means=means, stds=stds)
         )
 
-        if max_dim is None:
-            max_height, max_width = self._get_max_dims()
-            max_dim = max(max_height, max_width)
-        else:
-            max_height, max_width = max_dim, max_dim
-            self.imc = ski.io.ImageCollection(
-                self.img_path + "*", load_func=self._load_func, **{"max_dim": max_dim}
-            )
-        self.img_vec_channel_length = max_height * max_width
+        self.imc = ski.io.ImageCollection(
+            self.img_path + "*", load_func=self._laod_func
+        )
+        # self.img_vec_channel_length = max_height * max_width will do thhis wth a VAE
         self.classes, self.max_objs, self.obj_count = self._get_all_classes()
 
         self.vector_dataset = ImageVectorSet(self)
         # self.obj_vec_set = ObjectVectorSet(self)
-        
-        self.transforms = transforms = v2.Compose([
-                v2.ToImage(),
-                v2.Resize((max_dim,max_dim)),  # (None,max_size)
-                v2.ToDtype(torch.float32, scale=True),
-                v2.Normalize(mean=[0.5479, 0.5197, 0.4716], std=[0.0498, 0.0468, 0.0421]),
-                ])
-        
-    def __getitem__(self,idx):
+
+    def __getitem__(self, idx):
         return self.vector_dataset[idx]
 
     def __len__(self):
         return len(self.vector_dataset)
-        
-    def _load_func(self, f: str, max_dim: int = None):
-        # could do the vectorization here, once the w/h etc. are collected. This should probably be a swapable module, or submodule of the VectorSet, which should contain the transfroms as an object.
-        """
-        Load function for the sklearn image collection.
 
-        Parameters
-        ----------
-        f : str
-            Path to image.
-        max_dim : int, optional
-            Maximum allowed dimension. The default is None.
+    def _get_image_norm_params(self):
+        _laod_func = (
+            test_load_fn(dims=(self.max_dim, self.max_dim))
+            if self.max_dim is int
+            else test_load_fn()
+        )
+        imc = ski.io.ImageCollection(self.img_path + "*", load_func=_laod_func)
+        color = len(self.imc[0].shape) > 2
+        channels = self.imc[0].shape[2] if color else 1
 
-        Returns
-        -------
-        im : array
-            8-bit image array
+        px_mean, px_std = [np.zeros(channels)] * 2
+        for n, im in tqdm(
+            enumerate(imc),
+            desc="Scanning to find normalization parameters...",
+            unit="Image file",
+        ):
+            last_px_mean = px_mean.copy()
+            last_px_std = px_std.copy()
+            px_mean += (
+                (im.mean(0).mean(0) - px_mean) / (n + 1)
+                if channels == 2
+                else (im.mean() - px_mean) / (n + 1)
+            )
+            px_std = (
+                (im.std(0).std(0) - last_px_std) / (n + 1)
+                if channels == 2
+                else (im.std() - last_px_std) / (n + 1)
+            )
 
-        """
-        im = ski.io.imread(f)
-        im = self.transforms(im).numpy().transpose([1,2,0])
-        # if max_dim is not None:
-        #     aspect = im.shape[1] / im.shape[0]
-        #     if aspect > 1:  # short image
-        #         h = int(max_dim / aspect)
-        #         im = ski.transform.resize(im, [h, max_dim])
-        #     else:  # wide image
-        #         w = int(max_dim * aspect)
-        #         im = ski.transform.resize(im, [max_dim, w])
-        return im
+        return px_mean, px_std
 
-    def _get_max_dims(self):
+    def _get_image_dims(self):
         """
         Utility function to scan the image directory and return the largest
         width and height out of all the images. Needed to pad images when no
@@ -135,23 +130,30 @@ class Img_Obj_Dataset:
 
         Returns
         -------
-        H : TYPE
-            DESCRIPTION.
-        W : TYPE
-            DESCRIPTION.
+        h : int
+            Max height.
+        w : int
+            Max width.
+        mean : int
+            Mean dimension.
 
         """
-        h, w = 0, 0
-        for im in tqdm(
-            self.imc, desc="Scanning to find max image dimensions...", unit="Image file"
+
+        h, w, mean, last_mean = [0] * 4
+        for n, im in tqdm(
+            enumerate(self.imc),
+            desc="Scanning to find max image dimensions...",
+            unit="Image file",
         ):
             H, W = im.shape[:2]
+            mean = last_mean + (np.mean(H, W) - last_mean) / n
+
             if H > h:
                 h = H
             if W > w:
                 w = W
-        return h, w
-        
+        return h, w, mean
+
     def _get_all_classes(self):
         """
         Utility function to find all classes in the dataset.
@@ -220,6 +222,90 @@ class Img_Obj_Dataset:
             return df
         else:
             return zip(objs, classes, locs)
+
+
+# %% Load functions
+
+
+class og_load_fn:
+    def __init__(self, max_dim):
+        if isinstance(self.dims, int):
+            max_dim = max_dim
+        else:
+            max_dim = max(max_dim)
+
+    def __call__(self, f):
+        im = ski.io.imread(f)
+        if self.max_dim is not None:
+            aspect = im.shape[1] / im.shape[0]
+            if aspect > 1:  # short image
+                h = int(self.max_dim / aspect)
+                im = ski.transform.resize(im, [h, self.max_dim])
+            else:  # wide image
+                w = int(self.max_dim * aspect)
+                im = ski.transform.resize(im, [self.max_dim, w])
+        return im
+
+
+class test_load_fn:
+    def __init__(self, dims=None):
+        if dims is None:
+            dims = (640, 640)  # yolo default is (640,640)
+        self.dims = dims
+        self.transforms = v2.Compose(
+            [
+                LetterBox(new_shape=self.dims, scaleup=False),
+                v2.ToImage(),
+                v2.ToDtype(torch.float32, scale=True),
+            ]
+        )
+
+    def __call__(self, f):
+        im = ski.io.imread(f)
+        im = self.transforms(im).numpy().transpose([1, 2, 0])
+        return im
+
+
+class torch_load_fn_old:
+    def __init__(self, dims):
+        self.dims = dims
+        transforms = v2.Compose(
+            [
+                v2.ToImage(),
+                v2.Resize(self.dims),  # (None,max_size), yolo default is (640,640)
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(
+                    mean=[0.5479, 0.5197, 0.4716], std=[0.0498, 0.0468, 0.0421]
+                ),
+            ]
+        )
+
+    def __call__(self, f):
+        im = ski.io.imread(f)
+        im = self.transforms(im).numpy().transpose([1, 2, 0])
+        return im
+
+
+class torch_load_fn:
+    def __init__(
+        self, dims=None, means=[0.5479, 0.5197, 0.4716], stds=[0.0498, 0.0468, 0.0421]
+    ):
+        if dims is None:
+            dims = (640, 640)  # yolo default is (640,640)
+        self.dims = dims
+        self.transforms = v2.Compose(
+            [
+                LetterBox(new_shape=self.dims, scaleup=False),
+                v2.ToImage(),
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(mean=means, std=stds),
+            ]
+        )
+
+    def __call__(self, f):
+        im = ski.io.imread(f)
+        im = self.transforms(im).numpy().transpose([1, 2, 0])
+        return im
 
 
 # %% Label Modules: Swappable modules that gets label datafrabes and and pixel coordinatess of objects
@@ -345,7 +431,7 @@ class ImageVectorDataSet:
     def __getitem__(self, idx):
         if isinstance(idx, tuple):
             idx = idx[0]
-            
+
         if isinstance(idx, int):
             return self.getvec_fn(idx)
         elif isinstance(idx, slice):
@@ -367,7 +453,7 @@ class ImageVectorDataSet:
                 holder_vecs.append(vec)
                 holder_labs.append(labs)
             return np.stack(holder_vecs), np.stack(holder_labs)
-        elif isinstance(idx, (list,np.ndarray)): 
+        elif isinstance(idx, (list, np.ndarray)):
             holder_vecs, holder_labs = [], []
             for i in idx:
                 vec, labs = self.getvec_fn(i)
@@ -376,7 +462,7 @@ class ImageVectorDataSet:
             return np.stack(holder_vecs), np.stack(holder_labs)
         else:
             raise Exception("Passed index is of unknown type.")
-            
+
     def __len__(self):
         return len(self.dataset.imc)
 
@@ -391,7 +477,8 @@ class ImageVectorDataSet:
         y = np.stack(all_labels)
         return y
 
-class ImageVectorSet(ImageVectorDataSet):  
+
+class ImageVectorSet(ImageVectorDataSet):
     """
     Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
     """
@@ -695,8 +782,175 @@ def pad_resize_im(im, size=None):
         padded_image = ski.transform.resize(padded_image, [size, size])
     return padded_image
 
-def build_umap_reducer(ivds, embedding_dim=256, metric='cosine', block_frac=1):
-    block_sz = len(imc)*block_frac
+
+def build_umap_reducer(ivds, embedding_dim=256, metric="cosine", block_frac=1):
+    block_sz = len(imc) * block_frac
     reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
 
-    
+
+# ripped of from ultralytics to make image argument in __call__ come first
+class LetterBox:
+    """
+    Resize image and padding for detection, instance segmentation, pose.
+
+    This class resizes and pads images to a specified shape while preserving aspect ratio. It also updates
+    corresponding labels and bounding boxes.
+
+    Attributes:
+        new_shape (tuple): Target shape (height, width) for resizing.
+        auto (bool): Whether to use minimum rectangle.
+        scaleFill (bool): Whether to stretch the image to new_shape.
+        scaleup (bool): Whether to allow scaling up. If False, only scale down.
+        stride (int): Stride for rounding padding.
+        center (bool): Whether to center the image or align to top-left.
+
+    Methods:
+        __call__: Resize and pad image, update labels and bounding boxes.
+
+    Examples:
+        >>> transform = LetterBox(new_shape=(640, 640))
+        >>> result = transform(labels)
+        >>> resized_img = result["img"]
+        >>> updated_instances = result["instances"]
+    """
+
+    def __init__(
+        self,
+        new_shape=(640, 640),
+        auto=False,
+        scaleFill=False,
+        scaleup=True,
+        center=True,
+        stride=32,
+    ):
+        """
+        Initialize LetterBox object for resizing and padding images.
+
+        This class is designed to resize and pad images for object detection, instance segmentation, and pose estimation
+        tasks. It supports various resizing modes including auto-sizing, scale-fill, and letterboxing.
+
+        Args:
+            new_shape (Tuple[int, int]): Target size (height, width) for the resized image.
+            auto (bool): If True, use minimum rectangle to resize. If False, use new_shape directly.
+            scaleFill (bool): If True, stretch the image to new_shape without padding.
+            scaleup (bool): If True, allow scaling up. If False, only scale down.
+            center (bool): If True, center the placed image. If False, place image in top-left corner.
+            stride (int): Stride of the model (e.g., 32 for YOLOv5).
+
+        Attributes:
+            new_shape (Tuple[int, int]): Target size for the resized image.
+            auto (bool): Flag for using minimum rectangle resizing.
+            scaleFill (bool): Flag for stretching image without padding.
+            scaleup (bool): Flag for allowing upscaling.
+            stride (int): Stride value for ensuring image size is divisible by stride.
+
+        Examples:
+            >>> letterbox = LetterBox(new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, stride=32)
+            >>> resized_img = letterbox(original_img)
+        """
+        self.new_shape = new_shape
+        self.auto = auto
+        self.scaleFill = scaleFill
+        self.scaleup = scaleup
+        self.stride = stride
+        self.center = center  # Put the image in the middle or top-left
+
+    def __call__(self, image=None, labels=None):
+        """
+        Resizes and pads an image for object detection, instance segmentation, or pose estimation tasks.
+
+        This method applies letterboxing to the input image, which involves resizing the image while maintaining its
+        aspect ratio and adding padding to fit the new shape. It also updates any associated labels accordingly.
+
+        Args:
+            labels (Dict | None): A dictionary containing image data and associated labels, or empty dict if None.
+            image (np.ndarray | None): The input image as a numpy array. If None, the image is taken from 'labels'.
+
+        Returns:
+            (Dict | Tuple): If 'labels' is provided, returns an updated dictionary with the resized and padded image,
+                updated labels, and additional metadata. If 'labels' is empty, returns a tuple containing the resized
+                and padded image, and a tuple of (ratio, (left_pad, top_pad)).
+
+        Examples:
+            >>> letterbox = LetterBox(new_shape=(640, 640))
+            >>> result = letterbox(labels={"img": np.zeros((480, 640, 3)), "instances": Instances(...)})
+            >>> resized_img = result["img"]
+            >>> updated_instances = result["instances"]
+        """
+        if labels is None:
+            labels = {}
+        img = labels.get("img") if image is None else image
+        shape = img.shape[:2]  # current shape [height, width]
+        new_shape = labels.pop("rect_shape", self.new_shape)
+        if isinstance(new_shape, int):
+            new_shape = (new_shape, new_shape)
+
+        # Scale ratio (new / old)
+        r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+        if not self.scaleup:  # only scale down, do not scale up (for better val mAP)
+            r = min(r, 1.0)
+
+        # Compute padding
+        ratio = r, r  # width, height ratios
+        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+        dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
+        if self.auto:  # minimum rectangle
+            dw, dh = np.mod(dw, self.stride), np.mod(dh, self.stride)  # wh padding
+        elif self.scaleFill:  # stretch
+            dw, dh = 0.0, 0.0
+            new_unpad = (new_shape[1], new_shape[0])
+            ratio = (
+                new_shape[1] / shape[1],
+                new_shape[0] / shape[0],
+            )  # width, height ratios
+
+        if self.center:
+            dw /= 2  # divide padding into 2 sides
+            dh /= 2
+
+        if shape[::-1] != new_unpad:  # resize
+            img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
+        top, bottom = int(round(dh - 0.1)) if self.center else 0, int(round(dh + 0.1))
+        left, right = int(round(dw - 0.1)) if self.center else 0, int(round(dw + 0.1))
+        img = cv2.copyMakeBorder(
+            img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
+        )  # add border
+        if labels.get("ratio_pad"):
+            labels["ratio_pad"] = (labels["ratio_pad"], (left, top))  # for evaluation
+
+        if len(labels):
+            labels = self._update_labels(labels, ratio, left, top)
+            labels["img"] = img
+            labels["resized_shape"] = new_shape
+            return labels
+        else:
+            return img
+
+    def _update_labels(self, labels, ratio, padw, padh):
+        """
+        Updates labels after applying letterboxing to an image.
+
+        This method modifies the bounding box coordinates of instances in the labels
+        to account for resizing and padding applied during letterboxing.
+
+        Args:
+            labels (Dict): A dictionary containing image labels and instances.
+            ratio (Tuple[float, float]): Scaling ratios (width, height) applied to the image.
+            padw (float): Padding width added to the image.
+            padh (float): Padding height added to the image.
+
+        Returns:
+            (Dict): Updated labels dictionary with modified instance coordinates.
+
+        Examples:
+            >>> letterbox = LetterBox(new_shape=(640, 640))
+            >>> labels = {"instances": Instances(...)}
+            >>> ratio = (0.5, 0.5)
+            >>> padw, padh = 10, 20
+            >>> updated_labels = letterbox._update_labels(labels, ratio, padw, padh)
+        """
+        labels["instances"].convert_bbox(format="xyxy")
+        labels["instances"].denormalize(*labels["img"].shape[:2][::-1])
+        labels["instances"].scale(*ratio)
+        labels["instances"].add_padding(padw, padh)
+        return labels
