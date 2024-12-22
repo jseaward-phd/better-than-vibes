@@ -18,7 +18,7 @@ from torchvision.transforms import v2
 import umap
 
 # when loading multiple batches, just spit out n closest
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import  NearestNeighbors
 
 # what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
 
@@ -81,22 +81,24 @@ class Img_Obj_Dataset:
         self.img_vec_channel_length = max_height * max_width
         self.classes, self.max_objs, self.obj_count = self._get_all_classes()
 
-        self.whole_img_vec_set = ImageVectorSet(self)
+        self.vector_dataset = ImageVectorSet(self)
         # self.obj_vec_set = ObjectVectorSet(self)
-        self.transforms = transforms = v2.Compose(
-            [
+        
+        self.transforms = transforms = v2.Compose([
                 v2.ToImage(),
-                v2.Resize(
-                    None, max_size=max_dim
-                ),  # should prolly do this with size on the short side. Use mean or beadian dim, prolly.
+                v2.Resize((max_dim,max_dim)),  # (None,max_size)
                 v2.ToDtype(torch.float32, scale=True),
-                v2.Normalize(
-                    mean=[0.5479, 0.5197, 0.4716], std=[0.0498, 0.0468, 0.0421]
-                ),
-            ]
-        )
+                v2.Normalize(mean=[0.5479, 0.5197, 0.4716], std=[0.0498, 0.0468, 0.0421]),
+                ])
+        
+    def __getitem__(self,idx):
+        return self.vector_dataset[idx]
 
+    def __len__(self):
+        return len(self.vector_dataset)
+        
     def _load_func(self, f: str, max_dim: int = None):
+        # could do the vectorization here, once the w/h etc. are collected. This should probably be a swapable module, or submodule of the VectorSet, which should contain the transfroms as an object.
         """
         Load function for the sklearn image collection.
 
@@ -114,7 +116,7 @@ class Img_Obj_Dataset:
 
         """
         im = ski.io.imread(f)
-        im = self.transforms(im).numpy().transpose([1, 2, 0])
+        im = self.transforms(im).numpy().transpose([1,2,0])
         # if max_dim is not None:
         #     aspect = im.shape[1] / im.shape[0]
         #     if aspect > 1:  # short image
@@ -149,7 +151,7 @@ class Img_Obj_Dataset:
             if W > w:
                 w = W
         return h, w
-
+        
     def _get_all_classes(self):
         """
         Utility function to find all classes in the dataset.
@@ -221,8 +223,6 @@ class Img_Obj_Dataset:
 
 
 # %% Label Modules: Swappable modules that gets label datafrabes and and pixel coordinatess of objects
-
-
 class YOLO_Labels:
     def __init__(self, dataset):
         """
@@ -295,8 +295,6 @@ class YOLO_Labels:
 
 
 # %% Vector Datasets: Return vectors and object labels.
-
-
 class VecGetter:
     def __init__(self, vec_set):
         """
@@ -320,6 +318,7 @@ class VecGetter:
 
 ### TODO: a yolo v8 preprocess IVS
 class ImageVectorDataSet:
+    # mostly for the getitem to get around the fact that imc doesn't want to give back from index lists
     def __init__(self, dataset, getY: bool = True):
         """
         Vector Dataset superclass. For individual kinds of vectors, use a subclass
@@ -346,7 +345,7 @@ class ImageVectorDataSet:
     def __getitem__(self, idx):
         if isinstance(idx, tuple):
             idx = idx[0]
-
+            
         if isinstance(idx, int):
             return self.getvec_fn(idx)
         elif isinstance(idx, slice):
@@ -368,8 +367,7 @@ class ImageVectorDataSet:
                 holder_vecs.append(vec)
                 holder_labs.append(labs)
             return np.stack(holder_vecs), np.stack(holder_labs)
-        elif isinstance(idx, (list, np.ndarray)):
-
+        elif isinstance(idx, (list,np.ndarray)): 
             holder_vecs, holder_labs = [], []
             for i in idx:
                 vec, labs = self.getvec_fn(i)
@@ -377,8 +375,8 @@ class ImageVectorDataSet:
                 holder_labs.append(labs)
             return np.stack(holder_vecs), np.stack(holder_labs)
         else:
-            raise Exception("Prassed index is of unknown type.")
-
+            raise Exception("Passed index is of unknown type.")
+            
     def __len__(self):
         return len(self.dataset.imc)
 
@@ -393,9 +391,7 @@ class ImageVectorDataSet:
         y = np.stack(all_labels)
         return y
 
-
-# TODO: make a umap vector set, using reducer.update to add images in batches
-class ImageVectorSet(ImageVectorDataSet):
+class ImageVectorSet(ImageVectorDataSet):  
     """
     Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
     """
@@ -465,7 +461,7 @@ class NearestVectorCaller:
         """
         For doing knn on datasets whose vectors will not all fit in memory.
         Uses mini-batch k-means centroids as a set of index vectors. A test vector is
-        compared to the index vectors and only the underly vectors that fall
+        compared to the index vectors and only the underlying vectors that fall
         near the index vector are loaded. In the case where the test vector is
         close to multiple regions, they are all loaded for nearest neighbor calulation.
 
@@ -698,3 +694,9 @@ def pad_resize_im(im, size=None):
     if size is not None:
         padded_image = ski.transform.resize(padded_image, [size, size])
     return padded_image
+
+def build_umap_reducer(ivds, embedding_dim=256, metric='cosine', block_frac=1):
+    block_sz = len(imc)*block_frac
+    reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
+
+    

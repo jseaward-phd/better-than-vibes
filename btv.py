@@ -20,7 +20,6 @@ import pandas as pd
 from copy import deepcopy
 from tqdm import tqdm, trange
 
-
 def mean_gen(data):
     n = 0
     mean = 0.0
@@ -74,24 +73,15 @@ def prediction_info_multilabel(
                 A[i, j] = I
     return A
 
-
-def prediction_info(y_true, y_predicted, discount_chance=True):
-    # for classification with a single, binary label, otherwize need to selecet with the true label differently and replace 2 with 2^{# of labels} or do a sum over labels
+def prediction_info(y_true, y_predicted, discount_chance=True):  
+# for classification with a single, binary label, otherwize need to selecet with the true label differently and replace 2 with 2^{# of labels} or do a sum over labels
     A = []
     if isinstance(y_predicted, list):
         y_predicted = np.stack(y_predicted, axis=1)
         classes = y_predicted.shape[2] - 1
         for pred, true in zip(y_predicted, y_true):
-            if discount_chance:
-                I = [
-                    -np.log(p[t] + 1 / 2**classes) / np.log(2)
-                    for p, t in zip(pred, true)
-                ]
-            else:
-                I = [
-                    -np.log(p[t] / (2**classes) + 1 / (2**classes)) / np.log(2)
-                    for p, t in zip(pred, true)
-                ]
+            if discount_chance: I = [ -np.log(p[t] + 1 / 2**classes) / np.log(2) for p, t in zip(pred, true)]
+            else: I = [-np.log(p[t] / (2**classes) + 1 / (2**classes)) / np.log(2) for p, t in zip(pred, true)]
             A.append(I)
     else:
         classes = y_predicted.shape[1] - 1
@@ -163,10 +153,8 @@ def pick_nearest2test(X_train, y_train, X_test, y_test):
     return train0_idxs
 
 
-def prune_training_set(
-    X, y, test_idx=None, k=10, return_smaller_sets=True, return_mask=True, thresh=0
-):
-    # maybe do this in rounds to avoid dropping all the examples in isolated clusters. Will need to do rounds anyway for big sets...
+def prune_training_set(X, y, test_idx=None, k=10, return_smaller_sets=True, return_mask=True, thresh=0):
+    # maybe do this in rounds to avoid dropping all the examples in isolated clusters, or try radius clf. Will need to do rounds anyway for big sets...
     if test_idx is not None:
         allidx = np.arange(X.shape[0])
         trainidx = np.setdiff1d(allidx, test_idx)
@@ -203,7 +191,7 @@ def prune_training_set(
         X_train, y_train = X, y
 
     clf_knn_selfdrop = KNeighborsClassifier(
-        n_neighbors=100, metric="euclidean", weights=dist_weight_ignore_self
+        n_neighbors=25, metric="euclidean", weights=dist_weight_ignore_self
     )  # TODO: optimize n_neighbors
     clf_knn_selfdrop.fit(X_train, y_train)
     info = prediction_info(y_train, clf_knn_selfdrop.predict_proba(X_train))
@@ -211,9 +199,8 @@ def prune_training_set(
     ##not sure this is meaningful:
     train_self_info = info.sum(0)
     print("Train set self-info:", train_self_info)
-    if info.ndim > 1:
-        info = info.sum(1)
-
+    if info.ndim>1: info = info.sum(1)
+        
     if test_idx is not None:
         # sorted_X, sorted_y, info = order_samples_by_info(
         #     X_train, y_train, clf_knn_selfdrop, sort_info=False
@@ -238,18 +225,15 @@ def prune_training_set(
         )
         print("self_pruned_score: ", clf_knn.score(X_test, y_test))
 
-    selected_training_mask = (
-        info > thresh if return_mask else np.arange(len(y_train))[info > thresh]
-    )
+    selected_training_mask = info > thresh if return_mask else np.arange(len(y_train))[info > thresh]
     if return_smaller_sets:
         X_train_selected, y_train_selected = (
-            X_train[selected_training_mask, :],
+            X_train[np.arange(len(y_train))[selected_training_mask], :],
             y_train[selected_training_mask, :],
         )
         return X_train_selected, y_train_selected, selected_training_mask
     else:
         return selected_training_mask
-
 
 def order_folds_by_entropy(
     X, y, clf, fold_idxs: list, reverse=True, info=False
@@ -280,14 +264,12 @@ def order_samples_by_info(
 
     y_predicted = clf.predict_proba(X)
     info = prediction_info(y, y_predicted)
-    if info.ndim > 1:
-        info = info.sum(
-            1
-        )  # need to do something more sophisticated to order by info in different class labels
+    if info.ndim>1: 
+        info = info.sum(1)  # need to do something more sophisticated to order by info in different class labels
         sorted_y = y[np.argsort(info), :]
     else:
         sorted_y = zip(*sorted(zip(info, y), reverse=reverse))
-
+        
     if isinstance(X, list):
         _, sorted_X = zip(*sorted(zip(info, X), reverse=reverse))
     elif isinstance(X[0], np.ndarray):
@@ -301,7 +283,7 @@ def order_samples_by_info(
         )
     else:
         raise Exception(f"Variable X of unhandled type {type(X)}.")
-
+    
     if sort_info:
         info.sort()
     if reverse:
@@ -326,7 +308,7 @@ def fit_dknn_toUMAP_reducer(reducer, y_train, k=10, metric="euclidean"):
     return clf
 
 
-def collect_min_set(y, min_sz=0):
+def collect_min_set(y, min_sz=0):  
     # for collecting a minimum set for initial clf fitting which contains all classes
     idxs_out = []
 
@@ -334,9 +316,7 @@ def collect_min_set(y, min_sz=0):
         idxs_out.append(np.where(np.all(y == y_val, axis=1))[0][0])
 
     while len(idxs_out) < min_sz:
-        idxs_out = np.union1d(
-            idxs_out, np.random.choice(np.arange(len(y)), len(idxs_out) - min_sz)
-        )
+        idxs_out = np.union1d( idxs_out, np.random.choice(np.arange(len(y)), len(idxs_out) - min_sz) )
     return list(idxs_out), y[idxs_out]
 
 
