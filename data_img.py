@@ -15,9 +15,10 @@ import skimage as ski
 
 import torch
 from torchvision.transforms import v2
-import umap
-
 import cv2
+
+from typing import Optional, Sequence, Union, Callable
+from pathlib import Path
 
 # when loading multiple batches, just spit out n closest
 from sklearn.neighbors import NearestNeighbors
@@ -25,11 +26,9 @@ from sklearn.neighbors import NearestNeighbors
 # what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
 
 # TODO:
-# %%
-#    0.) Re-do vectorizaation with umap. Can just make each image into a row vector (with padding) and make a umap reducer.
-#    1.) Make torch vesion
-#    2.) Mke pretrained embedder version (maybe this doesn't need a data structure, it will already have one.)
-#    3.) import joblib # for parallel saving and loading?
+# 
+#       -- add train/test splitting to dataset object. maybe attach a torch DataLoader
+#       -- import joblib # for parallel saving and loading?
 
 # sampling options set later
 # %% Over-arching task-specific dataset classes. E.g. image sets for object detection, tabular classification sets, etc
@@ -38,7 +37,7 @@ from sklearn.neighbors import NearestNeighbors
 # may want to make a flag to save processed data arrays
 class Img_VAE_Dataset:
     def __init__(
-        self, train_dir_path: str, max_dim: int = None, label_type: str = "yolo"
+        self, train_dir_path: str, max_dim: Optional[int] = None, label_type: str = "yolo"
     ):
         """
         Dataset for object detection in images using bounding boxes.
@@ -69,11 +68,11 @@ class Img_VAE_Dataset:
         if label_type == "yolo":
             self.label_module = YOLO_Labels(self)
         ## make load functions for different scenarios
-        meaans, stds = self._get_image_norm_params()
+        self.means, self.stds = self._get_image_norm_params()
         self._laod_func = (
-            torch_load_fn(dims=(max_dim, max_dim), means=means, stds=stds)
+            torch_load_fn(dims=(max_dim, max_dim), means=self.means, stds=self.stds)
             if max_dim is int
-            else torch_load_fn(means=means, stds=stds)
+            else torch_load_fn(means=self.means, stds=self.stds)
         )
 
         self.imc = ski.io.ImageCollection(
@@ -82,10 +81,11 @@ class Img_VAE_Dataset:
         # self.img_vec_channel_length = max_height * max_width will do thhis wth a VAE
         self.classes, self.max_objs, self.obj_count = self._get_all_classes()
 
-        self.vector_dataset = ImageVectorSet(self)
+        self.vector_dataset = ImageVectorDataSet(self)
+        
         # self.obj_vec_set = ObjectVectorSet(self)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: Union[int,Sequence[int]]):
         return self.vector_dataset[idx]
 
     def __len__(self):
@@ -97,9 +97,10 @@ class Img_VAE_Dataset:
             if self.max_dim is int
             else test_load_fn()
         )
+
         imc = ski.io.ImageCollection(self.img_path + "*", load_func=_laod_func)
-        color = len(self.imc[0].shape) > 2
-        channels = self.imc[0].shape[2] if color else 1
+        color = len(imc[0].shape) > 2
+        channels = imc[0].shape[2] if color else 1
 
         px_mean, px_std = [np.zeros(channels)] * 2
         for n, im in tqdm(
@@ -107,17 +108,15 @@ class Img_VAE_Dataset:
             desc="Scanning to find normalization parameters...",
             unit="Image file",
         ):
-            last_px_mean = px_mean.copy()
-            last_px_std = px_std.copy()
             px_mean += (
                 (im.mean(0).mean(0) - px_mean) / (n + 1)
                 if channels == 2
                 else (im.mean() - px_mean) / (n + 1)
             )
             px_std = (
-                (im.std(0).std(0) - last_px_std) / (n + 1)
+                (im.std(0).std(0) - px_std) / (n + 1)
                 if channels == 2
-                else (im.std() - last_px_std) / (n + 1)
+                else (im.std() - px_std) / (n + 1)
             )
 
         return px_mean, px_std
@@ -125,7 +124,7 @@ class Img_VAE_Dataset:
     def _get_image_dims(self):
         """
         Utility function to scan the image directory and return the largest
-        width and height out of all the images. Needed to pad images when no
+        width and height out of all the images. For sizing the images when no
         max_dim is passed when initializing the set.
 
         Returns
@@ -201,7 +200,7 @@ class Img_VAE_Dataset:
             "right" (in pixel coordinates).
 
         """
-        im = self.imc[idx]
+        im = imc_framegetter(self.imc,idx)
         obj_boxes, df = self.label_module.get_obj_bounds(idx)
         objs = []
         classes = []
@@ -225,16 +224,14 @@ class Img_VAE_Dataset:
 
 
 # %% Load functions
-
-
 class og_load_fn:
-    def __init__(self, max_dim):
+    def __init__(self, max_dim:Union[int,Sequence[int]]):
         if isinstance(self.dims, int):
             max_dim = max_dim
         else:
             max_dim = max(max_dim)
 
-    def __call__(self, f):
+    def __call__(self, f:Union[str,Path]):
         im = ski.io.imread(f)
         if self.max_dim is not None:
             aspect = im.shape[1] / im.shape[0]
@@ -248,7 +245,7 @@ class og_load_fn:
 
 
 class test_load_fn:
-    def __init__(self, dims=None):
+    def __init__(self, dims:Optional[Union[int,Sequence[int]]]=None):
         if dims is None:
             dims = (640, 640)  # yolo default is (640,640)
         self.dims = dims
@@ -260,7 +257,7 @@ class test_load_fn:
             ]
         )
 
-    def __call__(self, f):
+    def __call__(self, f:Union[str,Path]):
         im = ski.io.imread(f)
         im = self.transforms(im).numpy().transpose([1, 2, 0])
         return im
@@ -269,7 +266,7 @@ class test_load_fn:
 class torch_load_fn_old:
     def __init__(self, dims):
         self.dims = dims
-        transforms = v2.Compose(
+        self.transforms = v2.Compose(
             [
                 v2.ToImage(),
                 v2.Resize(self.dims),  # (None,max_size), yolo default is (640,640)
@@ -369,7 +366,7 @@ class YOLO_Labels:
 
         """
         df = self.get_label_df(idx)
-        H, W = self.dataset.imc[idx].shape[:2]
+        H, W = imc_framegetter(self.dataset.imc, idx).shape[:2]
         obj_boxes = []
         for i, row in df.iterrows():
             top = floor((row.y_center - row.h / 2) * H)
@@ -380,7 +377,7 @@ class YOLO_Labels:
         return obj_boxes, df
 
 
-# %% Vector Datasets: Return vectors and object labels.
+# %% Vector Datasets: Return vectors and object labels. A lot of these can be hugely simplified with the imc framegetter
 class VecGetter:
     def __init__(self, vec_set):
         """
@@ -388,7 +385,7 @@ class VecGetter:
 
         Parameters
         ----------
-        vec_set : Vector Set,as in this section.
+        vec_set : Vector Set, as in this section.
             Soemthing with a __getitem__ that returns (vectros, labels).
 
         """
@@ -477,8 +474,8 @@ class ImageVectorDataSet:
         y = np.stack(all_labels)
         return y
 
-
-class ImageVectorSet(ImageVectorDataSet):
+## These are the things that get custom vectorization methods
+class ImageVectorSet_old(ImageVectorDataSet):
     """
     Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
     """
@@ -497,11 +494,11 @@ class ImageVectorSet(ImageVectorDataSet):
 
         Returns
         -------
-        TYPE
+        array
             Single data vector and label as (array, array)
 
         """
-        im = self.dataset.imc[idx]
+        im = imc_framegetter(self.dataset.imc, idx)
         df = self.dataset.label_module.get_label_df(idx)
         im_vec = im2vec(im, self.dataset.img_vec_channel_length)
         labs_binary = [0] * len(self.dataset.classes)
@@ -721,6 +718,98 @@ class NearestVectorCaller:
 
 
 # %% Utility Functions
+from torchvision.datasets.vision import VisionDataset
+
+    
+# class IMCWrapper(ski.io.ImageCollection):
+#     def __init__(self, imc):
+#         self.imc = imc
+        
+#     def __len__(self):
+#         return len(self.imc)
+    
+#     def __getitem__(self, idx):
+#         if isinstance(idx, tuple):
+#             idx = idx[0]
+        
+#         if isinstance(idx, int):
+#             return self.imc[idx]
+#         elif isinstance(idx, slice):
+#             holder_ims = []
+#             if idx.start is None:
+#                 start = 0
+#             elif idx.start == -1:
+#                 start = len(self.imc)
+#             else:
+#                 start = idx.start
+#             if idx.stop is None or idx.stop == -1:
+#                 stop = len(self.imc)
+#             else:
+#                 stop = idx.stop
+#             stop = idx.stop if idx.stop is not None else len(self.imc)
+#             step = idx.step if idx.step is not None else 1
+#             for i in range(start, stop, step):
+#                 im = self.imc[i]
+#                 holder_ims.append(im)
+#             return np.stack(holder_ims)
+#         elif isinstance(idx, (list, np.ndarray)):
+#             holder_ims = []
+#             for i in idx:
+#                 im = self.imc[i]
+#                 holder_ims.append(im)
+#             return np.stack(holder_ims)
+#         else:
+#             raise Exception("Passed index is of unknown type.")
+            
+def imc_framegetter(imc, idx):
+    if isinstance(idx, tuple):
+        idx = idx[0]
+    
+    if isinstance(idx, int):
+        return imc[idx]
+    elif isinstance(idx, slice):
+        holder_ims = []
+        if idx.start is None:
+            start = 0
+        elif idx.start == -1:
+            start = len(imc)
+        else:
+            start = idx.start
+        if idx.stop is None or idx.stop == -1:
+            stop = len(imc)
+        else:
+            stop = idx.stop
+        stop = idx.stop if idx.stop is not None else len(imc)
+        step = idx.step if idx.step is not None else 1
+        for i in range(start, stop, step):
+            im = imc[i]
+            holder_ims.append(im)
+        return np.stack(holder_ims)
+    elif isinstance(idx, (list, np.ndarray)):
+        holder_ims = []
+        for i in idx:
+            im = imc[i]
+            holder_ims.append(im)
+        return np.stack(holder_ims)
+    else:
+        raise Exception("Passed index is of unknown type.")
+
+class VAEImageCollectionSet(VisionDataset):
+    def __init__(self, imc:ski.io.ImageCollection, split: str, transform: Optional[Callable] = None):
+        self.split = split
+        self.imc = imc
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.imc)
+
+    def __getitem__(self, idx:int):
+        im = self.imc[idx]
+        if self.transform is not None:
+            im = self.transform(im)
+        return im, None
+            
+    
 def im2vec(im, img_vec_channel_length):
     """
     Converts an image array to a vector.
@@ -783,12 +872,15 @@ def pad_resize_im(im, size=None):
     return padded_image
 
 
-def build_umap_reducer(ivds, embedding_dim=256, metric="cosine", block_frac=1):
-    block_sz = len(imc) * block_frac
-    reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
+# def build_umap_reducer(ivds, embedding_dim=256, metric="cosine", block_frac=1):
+#     block_sz = len(ivds) * block_frac
+#     reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
+#     for ...:
+#     return reducer
 
 
-# ripped of from ultralytics to make image argument in __call__ come first
+
+# ripped off from ultralytics to make image argument in __call__ come first
 class LetterBox:
     """
     Resize image and padding for detection, instance segmentation, pose.

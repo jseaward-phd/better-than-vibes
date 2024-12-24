@@ -5,3 +5,4 @@ data/*
 .virtual_documents/
 *.pkl
 *.pt
+.spyproject/*
