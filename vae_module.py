@@ -6,22 +6,25 @@ Created on Mon Dec 23 15:00:24 2024
 @author: J. Seaward
 """
 
-from pytorch_lightning import LightningDataModule
-from typing import List, Optional, Sequence, Union, Any, Callable
+from typing import List, Optional, Sequence, Union
 from pathlib import Path
-import yaml 
+import os, yaml 
 import numpy as np
 
 from data_img import Img_VAE_Dataset, VAEImageCollectionSet
 
 from PyTorchVAE.models.vanilla_vae import VanillaVAE
-from PyTorchVAE.dataset import VAEDataset
-from pytorch_lightning import Trainer
+from PyTorchVAE.experiment import VAEXperiment
 from torchvision import transforms
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from skimage.io import ImageCollection
 
-
+from torch.cuda import is_available
+from pytorch_lightning import LightningDataModule
+from pytorch_lightning import Trainer
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+# from pytorch_lightning.plugins import DDPPlugin
 
 #%% defs
 class vae_dataset(LightningDataModule):
@@ -62,23 +65,26 @@ class vae_dataset(LightningDataModule):
         self.patch_size = patch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
+        self.img_sz = img_sz
         
             
     def setup(self, stage: Optional[str] = None) -> None:
         train_transforms = transforms.Compose(
             [
+                transforms.ToPILImage(),
                 transforms.RandomHorizontalFlip(),
                 transforms.CenterCrop(148),
-                transforms.Resize(self.patch_size),
+                transforms.Resize(self.img_sz), # self.patch_size),
                 transforms.ToTensor(),
             ]
         )
         
         val_transforms = transforms.Compose(
             [
+                transforms.ToPILImage(),
                 transforms.RandomHorizontalFlip(),
                 transforms.CenterCrop(148),
-                transforms.Resize(self.patch_size),
+                transforms.Resize(self.img_sz), # self.patch_size),
                 transforms.ToTensor(),
             ]
         )
@@ -124,12 +130,43 @@ class vae_dataset(LightningDataModule):
         )
 
 
-#%% routine
+#%% routine phase 1
 
 config_path = 'PyTorchVAE/configs/btv_vae.yaml'
 
 config = yaml.safe_load(open(config_path,'r'))
 model = VanillaVAE(**config['model_params'])
-data = vae_dataset(val_idx=np.load('scratch.npy'),
-    **config["data_params"], pin_memory=len(config["trainer_params"]["gpus"]) != 0
+data = vae_dataset(val_idx=np.load('scratch_test.npy'),
+    **config["data_params"], pin_memory=is_available()
 )
+data.setup()
+#%%
+tb_logger = TensorBoardLogger(
+    save_dir=config["logging_params"]["save_dir"],
+    name=config["model_params"]["name"],
+)
+experiment = VAEXperiment(model, config["exp_params"])
+
+runner = Trainer(
+    logger=tb_logger,
+    callbacks=[
+        LearningRateMonitor(),
+        ModelCheckpoint(
+            save_top_k=2,
+            dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
+            monitor="val_loss",
+            save_last=True,
+        ),
+    ],
+    # strategy="ddp_notebook", #DDPPlugin(find_unused_parameters=False),
+    **config["trainer_params"],
+)
+#%%
+
+Path(f"{tb_logger.log_dir}/Samples").mkdir(exist_ok=True, parents=True)
+Path(f"{tb_logger.log_dir}/Reconstructions").mkdir(exist_ok=True, parents=True)
+
+
+print(f"======= Training {config['model_params']['name']} =======")
+runner.fit(experiment, datamodule=data)
+

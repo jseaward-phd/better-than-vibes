@@ -807,7 +807,7 @@ class VAEImageCollectionSet(VisionDataset):
         im = self.imc[idx]
         if self.transform is not None:
             im = self.transform(im)
-        return im, None
+        return im, torch.zeros(40, dtype=int)
             
     
 def im2vec(im, img_vec_channel_length):
