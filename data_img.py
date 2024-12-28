@@ -26,7 +26,7 @@ from sklearn.neighbors import NearestNeighbors
 # what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
 
 # TODO:
-# 
+#
 #       -- add train/test splitting to dataset object. maybe attach a torch DataLoader
 #       -- import joblib # for parallel saving and loading?
 
@@ -37,7 +37,10 @@ from sklearn.neighbors import NearestNeighbors
 # may want to make a flag to save processed data arrays
 class Img_VAE_Dataset:
     def __init__(
-        self, train_dir_path: str, max_dim: Optional[int] = None, label_type: str = "yolo"
+        self,
+        train_dir_path: str,
+        max_dim: Optional[int] = None,
+        label_type: str = "yolo",
     ):
         """
         Dataset for object detection in images using bounding boxes.
@@ -82,10 +85,10 @@ class Img_VAE_Dataset:
         self.classes, self.max_objs, self.obj_count = self._get_all_classes()
 
         self.vector_dataset = ImageVectorDataSet(self)
-        
+
         # self.obj_vec_set = ObjectVectorSet(self)
 
-    def __getitem__(self, idx: Union[int,Sequence[int]]):
+    def __getitem__(self, idx: Union[int, Sequence[int]]):
         return self.vector_dataset[idx]
 
     def __len__(self):
@@ -200,7 +203,7 @@ class Img_VAE_Dataset:
             "right" (in pixel coordinates).
 
         """
-        im = imc_framegetter(self.imc,idx)
+        im = imc_framegetter(self.imc, idx)
         obj_boxes, df = self.label_module.get_obj_bounds(idx)
         objs = []
         classes = []
@@ -225,13 +228,13 @@ class Img_VAE_Dataset:
 
 # %% Load functions
 class og_load_fn:
-    def __init__(self, max_dim:Union[int,Sequence[int]]):
+    def __init__(self, max_dim: Union[int, Sequence[int]]):
         if isinstance(self.dims, int):
             max_dim = max_dim
         else:
             max_dim = max(max_dim)
 
-    def __call__(self, f:Union[str,Path]):
+    def __call__(self, f: Union[str, Path]):
         im = ski.io.imread(f)
         if self.max_dim is not None:
             aspect = im.shape[1] / im.shape[0]
@@ -245,7 +248,7 @@ class og_load_fn:
 
 
 class test_load_fn:
-    def __init__(self, dims:Optional[Union[int,Sequence[int]]]=None):
+    def __init__(self, dims: Optional[Union[int, Sequence[int]]] = None):
         if dims is None:
             dims = (640, 640)  # yolo default is (640,640)
         self.dims = dims
@@ -257,7 +260,7 @@ class test_load_fn:
             ]
         )
 
-    def __call__(self, f:Union[str,Path]):
+    def __call__(self, f: Union[str, Path]):
         im = ski.io.imread(f)
         im = self.transforms(im).numpy().transpose([1, 2, 0])
         return im
@@ -473,6 +476,7 @@ class ImageVectorDataSet:
             all_labels.append(labs_binary)
         y = np.stack(all_labels)
         return y
+
 
 ## These are the things that get custom vectorization methods
 class ImageVectorSet_old(ImageVectorDataSet):
@@ -720,18 +724,18 @@ class NearestVectorCaller:
 # %% Utility Functions
 from torchvision.datasets.vision import VisionDataset
 
-    
+
 # class IMCWrapper(ski.io.ImageCollection):
 #     def __init__(self, imc):
 #         self.imc = imc
-        
+
 #     def __len__(self):
 #         return len(self.imc)
-    
+
 #     def __getitem__(self, idx):
 #         if isinstance(idx, tuple):
 #             idx = idx[0]
-        
+
 #         if isinstance(idx, int):
 #             return self.imc[idx]
 #         elif isinstance(idx, slice):
@@ -760,11 +764,12 @@ from torchvision.datasets.vision import VisionDataset
 #             return np.stack(holder_ims)
 #         else:
 #             raise Exception("Passed index is of unknown type.")
-            
+
+
 def imc_framegetter(imc, idx):
     if isinstance(idx, tuple):
         idx = idx[0]
-    
+
     if isinstance(idx, int):
         return imc[idx]
     elif isinstance(idx, slice):
@@ -794,8 +799,14 @@ def imc_framegetter(imc, idx):
     else:
         raise Exception("Passed index is of unknown type.")
 
+
 class VAEImageCollectionSet(VisionDataset):
-    def __init__(self, imc:ski.io.ImageCollection, split: str, transform: Optional[Callable] = None):
+    def __init__(
+        self,
+        imc: ski.io.ImageCollection,
+        split: str,
+        transform: Optional[Callable] = None,
+    ):
         self.split = split
         self.imc = imc
         self.transform = transform
@@ -803,13 +814,13 @@ class VAEImageCollectionSet(VisionDataset):
     def __len__(self):
         return len(self.imc)
 
-    def __getitem__(self, idx:int):
+    def __getitem__(self, idx: int):
         im = self.imc[idx]
         if self.transform is not None:
             im = self.transform(im)
         return im, torch.zeros(40, dtype=int)
-            
-    
+
+
 def im2vec(im, img_vec_channel_length):
     """
     Converts an image array to a vector.
@@ -877,7 +888,6 @@ def pad_resize_im(im, size=None):
 #     reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
 #     for ...:
 #     return reducer
-
 
 
 # ripped off from ultralytics to make image argument in __call__ come first

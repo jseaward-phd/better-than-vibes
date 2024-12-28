@@ -35,9 +35,8 @@ def mean_gen(data):
         return mean
 
 
-def dist_weight_ignore_self(
-    dist,
-):  # custom weighting function for a dknn that ignores points already in the fit set.
+# custom weighting function for a dknn that ignores points already in the fit set.
+def dist_weight_ignore_self(dist):
     if dist.dtype is np.dtype(object):
         for point_dist_i, point_dist in enumerate(dist):
             # check if point_dist is iterable
