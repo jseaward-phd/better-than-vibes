@@ -55,7 +55,7 @@ class vae_dataset(LightningDataModule):
             )
         if not isinstance(data_set, Img_VAE_Dataset):
             data_set = Img_VAE_Dataset(data_set, max_dim=patch_size)
-            
+
         if val_data_set is not None:
             self.train_data_set = data_set.imc
             self.val_data_set = val_data_set.imc
@@ -75,13 +75,13 @@ class vae_dataset(LightningDataModule):
         # self.img_sz = img_sz
 
         self.transformsv2 = transforms.v2.Compose(
-           [
-               LetterBox(new_shape=self.patch_size, scaleup=True),
-               transforms.v2.ToImage(),
-               transforms.v2.RandomHorizontalFlip(),
-               transforms.v2.ToDtype(float32, scale=True),
-           ])
-        
+            [
+                LetterBox(new_shape=self.patch_size, scaleup=True),
+                transforms.v2.ToImage(),
+                transforms.v2.RandomHorizontalFlip(),
+                transforms.v2.ToDtype(float32, scale=True),
+            ]
+        )
 
     def setup(self, stage: Optional[str] = None) -> None:
         train_transforms = self.transformsv2
@@ -153,21 +153,30 @@ def format_lightning_state_dict(indict: dict) -> dict:
 
 
 def convert_embedding_list(latents_in: list) -> np.array:
-    out = np.vstack(
-        [
-            np.hstack([x.detach().numpy(), y.exp().detach().numpy()])
-            for x, y in latents_in
-        ]
-    ) if latents_in[0].shape[0] > 2 else  np.vstack(
-        [
-            np.hstack([latents_in[0].detach().numpy(), latents_in[1].exp().detach().numpy()])
-        ]
+    out = (
+        np.vstack(
+            [
+                np.hstack([x.detach().numpy(), y.exp().detach().numpy()])
+                for x, y in latents_in
+            ]
+        )
+        if latents_in[0].shape[0] > 2
+        else np.vstack(
+            [
+                np.hstack(
+                    [
+                        latents_in[0].detach().numpy(),
+                        latents_in[1].exp().detach().numpy(),
+                    ]
+                )
+            ]
+        )
     )
-    
+
     return out
 
 
-def dist_weight_passthru(dist): #
+def dist_weight_passthru(dist):  #
     return dist
 
 
@@ -231,4 +240,4 @@ Path(f"{tb_logger.log_dir}/Reconstructions").mkdir(exist_ok=True, parents=True)
 print(f"======= Training {config['model_params']['name']} =======")
 empty_cache()
 runner.fit(experiment, datamodule=data)
-print('Done!')
+print("Done!")

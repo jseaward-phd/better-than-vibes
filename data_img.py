@@ -24,7 +24,6 @@ from pathlib import Path
 from sklearn.neighbors import NearestNeighbors
 
 
-
 # what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
 
 # TODO:
@@ -37,7 +36,7 @@ from sklearn.neighbors import NearestNeighbors
 
 
 # may want to make a flag to save processed data arrays
-class Img_VAE_Dataset: # rename since using BYOL approach, also make torch option
+class Img_VAE_Dataset:  # rename since using BYOL approach, also make torch option
     def __init__(
         self,
         train_dir_path: str,
@@ -77,7 +76,12 @@ class Img_VAE_Dataset: # rename since using BYOL approach, also make torch optio
         ## make load functions for different scenarios
         self.means, self.stds = self._get_image_norm_params()
         self._laod_func = (
-            torch_load_fn(dims=(max_dim, max_dim), means=self.means, stds=self.stds, numpy=self.numpy)
+            torch_load_fn(
+                dims=(max_dim, max_dim),
+                means=self.means,
+                stds=self.stds,
+                numpy=self.numpy,
+            )
             if isinstance(max_dim, int)
             else torch_load_fn(means=self.means, stds=self.stds, numpy=self.numpy)
         )
@@ -255,7 +259,7 @@ class test_load_fn:
         self.dims = dims
         self.transforms = v2.Compose(
             [
-                LetterBox(new_shape=self.dims, scaleup=True), # scaleup=False
+                LetterBox(new_shape=self.dims, scaleup=True),  # scaleup=False
                 v2.ToImage(),
                 v2.ToDtype(torch.float32, scale=True),
             ]
@@ -289,7 +293,11 @@ class torch_load_fn_old:
 
 class torch_load_fn:
     def __init__(
-        self, dims=(640, 640), means=[0.5479, 0.5197, 0.4716], stds=[0.0498, 0.0468, 0.0421], numpy=True
+        self,
+        dims=(640, 640),
+        means=[0.5479, 0.5197, 0.4716],
+        stds=[0.0498, 0.0468, 0.0421],
+        numpy=True,
     ):
         self.dims = dims
         self.transforms = v2.Compose(
@@ -304,7 +312,11 @@ class torch_load_fn:
 
     def __call__(self, f):
         im = ski.io.imread(f)
-        im = self.transforms(im).numpy().transpose([1, 2, 0]) if self.numpy else self.transforms(im)
+        im = (
+            self.transforms(im).numpy().transpose([1, 2, 0])
+            if self.numpy
+            else self.transforms(im)
+        )
         return im
 
 
@@ -402,7 +414,7 @@ class VecGetter:
         return len(self.vec_set)
 
 
-### TODO: a yolo v8 preprocess IVS
+### TODO: a pytorch version/flag
 class ImageVectorDataSet:
     # mostly for the getitem to get around the fact that imc doesn't want to give back from index lists
     def __init__(self, dataset, getY: bool = True):
@@ -487,8 +499,23 @@ class WholeImageSet(ImageVectorDataSet):
         for label in set(df["class"]):
             labs_binary[label] = 1  # make binary vector for **presence** of object
         return np.array(im), np.array(labs_binary)
-    
-class ImageVectorSet_old(ImageVectorDataSet): # new one will usr some embedder or other
+
+
+class BYOLVectorSet(ImageVectorDataSet):
+    def __init__(self, dataset, getY: bool = True):
+        # this needs to collect and attach the byol learner for embedding
+
+        self.dataset = dataset  # the superior Img Vec Dataset
+        self.X = VecGetter(self)
+        if getY:
+            self.y = self._get_y()
+
+    def getvec_fn(self, idx: int):
+        # this will get the embedding vectors with projection, embedding = learner(imgs.cuda(0), return_embedding=True)
+        pass
+
+
+class ImageVectorSet_old(ImageVectorDataSet):  # new one will usr some embedder or other
     """
     Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
     """
@@ -679,8 +706,8 @@ class NearestVectorCaller:
         a, b = np.where(rel_err < tol)
         keys_to_load_set = keys_to_load_set.union(
             set(
-                    np.where(distances[x] == sorted_distances[x, y])[0].item()
-                    for x, y in zip(a, b)
+                np.where(distances[x] == sorted_distances[x, y])[0].item()
+                for x, y in zip(a, b)
             )
         )
 
@@ -1063,4 +1090,3 @@ class LetterBox:
         labels["instances"].scale(*ratio)
         labels["instances"].add_padding(padw, padh)
         return labels
-
