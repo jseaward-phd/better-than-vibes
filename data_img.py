@@ -23,6 +23,8 @@ from pathlib import Path
 # when loading multiple batches, just spit out n closest
 from sklearn.neighbors import NearestNeighbors
 
+
+
 # what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
 
 # TODO:
@@ -35,7 +37,7 @@ from sklearn.neighbors import NearestNeighbors
 
 
 # may want to make a flag to save processed data arrays
-class Img_VAE_Dataset:
+class Img_VAE_Dataset: # rename since using BYOL approach
     def __init__(
         self,
         train_dir_path: str,
@@ -84,7 +86,7 @@ class Img_VAE_Dataset:
         # self.img_vec_channel_length = max_height * max_width will do thhis wth a VAE
         self.classes, self.max_objs, self.obj_count = self._get_all_classes()
 
-        self.vector_dataset = ImageVectorDataSet(self)
+        self.vector_dataset = WholeImageSet(self)
 
         # self.obj_vec_set = ObjectVectorSet(self)
 
@@ -254,7 +256,7 @@ class test_load_fn:
         self.dims = dims
         self.transforms = v2.Compose(
             [
-                LetterBox(new_shape=self.dims, scaleup=False),
+                LetterBox(new_shape=self.dims, scaleup=True), # scaleup=False
                 v2.ToImage(),
                 v2.ToDtype(torch.float32, scale=True),
             ]
@@ -479,7 +481,16 @@ class ImageVectorDataSet:
 
 
 ## These are the things that get custom vectorization methods
-class ImageVectorSet_old(ImageVectorDataSet):
+class WholeImageSet(ImageVectorDataSet):
+    def getvec_fn(self, idx: int):
+        im = imc_framegetter(self.dataset.imc, idx)
+        df = self.dataset.label_module.get_label_df(idx)
+        labs_binary = [0] * len(self.dataset.classes)
+        for label in set(df["class"]):
+            labs_binary[label] = 1  # make binary vector for **presence** of object
+        return np.array(im), np.array(labs_binary)
+    
+class ImageVectorSet_old(ImageVectorDataSet): # new one will usr some embedder or other
     """
     Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
     """
@@ -1056,3 +1067,4 @@ class LetterBox:
         labels["instances"].scale(*ratio)
         labels["instances"].add_padding(padw, padh)
         return labels
+

@@ -11,7 +11,7 @@ from pathlib import Path
 import os, yaml
 import numpy as np
 
-from data_img import Img_VAE_Dataset, VAEImageCollectionSet
+from data_img import Img_VAE_Dataset, VAEImageCollectionSet, LetterBox
 
 from PyTorchVAE.models.vanilla_vae import VanillaVAE
 from PyTorchVAE.experiment import VAEXperiment
@@ -25,6 +25,8 @@ from pytorch_lightning import LightningDataModule
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from torch import load, float32
+
 
 # from pytorch_lightning.plugins import DDPPlugin
 
@@ -40,7 +42,7 @@ class vae_dataset(LightningDataModule):
         train_batch_size: int = 8,
         val_batch_size: int = 8,
         patch_size: Union[int, Sequence[int]] = (256, 256),
-        img_sz: Union[int, Sequence[int]] = 640,
+        # img_sz: Union[int, Sequence[int]] = 640,
         num_workers: int = 0,
         pin_memory: bool = False,
         **kwargs,
@@ -52,8 +54,8 @@ class vae_dataset(LightningDataModule):
                 "Must provide a val set, either by index or a sepeate dataset."
             )
         if not isinstance(data_set, Img_VAE_Dataset):
-            data_set = Img_VAE_Dataset(data_set, max_dim=img_sz)
-
+            data_set = Img_VAE_Dataset(data_set, max_dim=patch_size)
+            
         if val_data_set is not None:
             self.train_data_set = data_set.imc
             self.val_data_set = val_data_set.imc
@@ -70,28 +72,39 @@ class vae_dataset(LightningDataModule):
         self.patch_size = patch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
-        self.img_sz = img_sz
+        # self.img_sz = img_sz
+
+        self.transformsv2 = transforms.v2.Compose(
+           [
+               LetterBox(new_shape=self.patch_size, scaleup=True),
+               transforms.v2.ToImage(),
+               transforms.v2.RandomHorizontalFlip(),
+               transforms.v2.ToDtype(float32, scale=True),
+           ])
+        
 
     def setup(self, stage: Optional[str] = None) -> None:
-        train_transforms = transforms.Compose(
-            [
-                transforms.ToPILImage(),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomCrop(148),
-                transforms.Resize(self.patch_size),
-                transforms.ToTensor(),
-            ]
-        )
+        train_transforms = self.transformsv2
+        # transforms.Compose(
+        #     [
+        #         transforms.ToPILImage(),
+        #         transforms.RandomHorizontalFlip(),
+        #         transforms.RandomCrop(148),
+        #         transforms.Resize(self.patch_size),
+        #         transforms.ToTensor(),
+        #     ]
+        # )
 
-        val_transforms = transforms.Compose(
-            [
-                transforms.ToPILImage(),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomCrop(148),
-                transforms.Resize(self.patch_size),
-                transforms.ToTensor(),
-            ]
-        )
+        val_transforms = self.transformsv2
+        # transforms.Compose(
+        #     [
+        #         transforms.ToPILImage(),
+        #         transforms.RandomHorizontalFlip(),
+        #         transforms.RandomCrop(148),
+        #         transforms.Resize(self.patch_size),
+        #         transforms.ToTensor(),
+        #     ]
+        # )
 
         self.train_dataset = VAEImageCollectionSet(  # need to make a child of from torchvision.datasets.vision import VisionDataset
             self.train_data_set,
@@ -145,15 +158,22 @@ def convert_embedding_list(latents_in: list) -> np.array:
             np.hstack([x.detach().numpy(), y.exp().detach().numpy()])
             for x, y in latents_in
         ]
+    ) if latents_in[0].shape[0] > 2 else  np.vstack(
+        [
+            np.hstack([latents_in[0].detach().numpy(), latents_in[1].exp().detach().numpy()])
+        ]
     )
+    
     return out
 
 
-def dist_weight_passthru(dist):
+def dist_weight_passthru(dist): #
     return dist
 
 
-def mean_and_var_dist(a, b):  # takes 2 1D vectors
+def mean_and_var_dist(a, b):  # takes 2 1D vectors, need to think about 1- and 1/
+    a = a.squeeze()
+    b = b.squeeze()
     break_pt = len(a) // 2
     assert (
         break_pt == len(b) / 2
@@ -177,7 +197,6 @@ data = vae_dataset(
 data.setup()
 # %% Load model
 
-from torch import load
 
 weights = load("runs/VanillaVAE/version_5/checkpoints/last.ckpt", weights_only=True)
 model.load_state_dict(state_dict=format_lightning_state_dict(weights))
@@ -212,3 +231,4 @@ Path(f"{tb_logger.log_dir}/Reconstructions").mkdir(exist_ok=True, parents=True)
 print(f"======= Training {config['model_params']['name']} =======")
 empty_cache()
 runner.fit(experiment, datamodule=data)
+print('Done!')
