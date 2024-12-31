@@ -37,12 +37,13 @@ from sklearn.neighbors import NearestNeighbors
 
 
 # may want to make a flag to save processed data arrays
-class Img_VAE_Dataset: # rename since using BYOL approach
+class Img_VAE_Dataset: # rename since using BYOL approach, also make torch option
     def __init__(
         self,
         train_dir_path: str,
         max_dim: Optional[int] = None,
         label_type: str = "yolo",
+        numpy: bool = False,
     ):
         """
         Dataset for object detection in images using bounding boxes.
@@ -69,15 +70,16 @@ class Img_VAE_Dataset: # rename since using BYOL approach
         self.img_path = os.path.join(self.trainpath, "images/")  # could make suffix arg
         self.label_path = os.path.join(self.trainpath, "labels/")
         self.max_dim = max_dim
+        self.numpy = numpy
         ## make different modules for differen label types
         if label_type == "yolo":
             self.label_module = YOLO_Labels(self)
         ## make load functions for different scenarios
         self.means, self.stds = self._get_image_norm_params()
         self._laod_func = (
-            torch_load_fn(dims=(max_dim, max_dim), means=self.means, stds=self.stds)
-            if max_dim is int
-            else torch_load_fn(means=self.means, stds=self.stds)
+            torch_load_fn(dims=(max_dim, max_dim), means=self.means, stds=self.stds, numpy=self.numpy)
+            if isinstance(max_dim, int)
+            else torch_load_fn(means=self.means, stds=self.stds, numpy=self.numpy)
         )
 
         self.imc = ski.io.ImageCollection(
@@ -152,10 +154,8 @@ class Img_VAE_Dataset: # rename since using BYOL approach
             H, W = im.shape[:2]
             mean = last_mean + (np.mean(H, W) - last_mean) / n
 
-            if H > h:
-                h = H
-            if W > w:
-                w = W
+            h = max(h, H)
+            w = max(w, W)
         return h, w, mean
 
     def _get_all_classes(self):
@@ -179,8 +179,7 @@ class Img_VAE_Dataset: # rename since using BYOL approach
             df = self.label_module.get_label_df(idx)
             labels = labels.union(df["class"])
             count_labs += len(df)
-            if len(df) > max_labs:
-                max_labs = len(df)
+            max_labs = max(max_labs, len(df))
         return labels, max_labs, count_labs
 
     def get_objects(self, idx: int, return_df: bool = False):
@@ -232,9 +231,9 @@ class Img_VAE_Dataset: # rename since using BYOL approach
 class og_load_fn:
     def __init__(self, max_dim: Union[int, Sequence[int]]):
         if isinstance(self.dims, int):
-            max_dim = max_dim
+            self.max_dim = max_dim
         else:
-            max_dim = max(max_dim)
+            self.max_dim = max(max_dim)
 
     def __call__(self, f: Union[str, Path]):
         im = ski.io.imread(f)
@@ -290,10 +289,8 @@ class torch_load_fn_old:
 
 class torch_load_fn:
     def __init__(
-        self, dims=None, means=[0.5479, 0.5197, 0.4716], stds=[0.0498, 0.0468, 0.0421]
+        self, dims=(640, 640), means=[0.5479, 0.5197, 0.4716], stds=[0.0498, 0.0468, 0.0421], numpy=True
     ):
-        if dims is None:
-            dims = (640, 640)  # yolo default is (640,640)
         self.dims = dims
         self.transforms = v2.Compose(
             [
@@ -303,10 +300,11 @@ class torch_load_fn:
                 v2.Normalize(mean=means, std=stds),
             ]
         )
+        self.numpy = numpy
 
     def __call__(self, f):
         im = ski.io.imread(f)
-        im = self.transforms(im).numpy().transpose([1, 2, 0])
+        im = self.transforms(im).numpy().transpose([1, 2, 0]) if self.numpy else self.transforms(im)
         return im
 
 
@@ -373,7 +371,7 @@ class YOLO_Labels:
         df = self.get_label_df(idx)
         H, W = imc_framegetter(self.dataset.imc, idx).shape[:2]
         obj_boxes = []
-        for i, row in df.iterrows():
+        for _, row in df.iterrows():
             top = floor((row.y_center - row.h / 2) * H)
             bottom = top + ceil(row.h * H)
             left = floor((row.x_center - row.w / 2) * W)
@@ -681,10 +679,8 @@ class NearestVectorCaller:
         a, b = np.where(rel_err < tol)
         keys_to_load_set = keys_to_load_set.union(
             set(
-                [
                     np.where(distances[x] == sorted_distances[x, y])[0].item()
                     for x, y in zip(a, b)
-                ]
             )
         )
 

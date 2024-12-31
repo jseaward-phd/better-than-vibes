@@ -10,7 +10,6 @@ import argparse
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
-from sklearn.metrics import accuracy_score
 from sklearn.model_selection import (
     train_test_split,  # can just train/test split np.arange(len(ds)) to get back indeces for large sets
     StratifiedKFold,  # use X = np.zeros(n_samples) in .split
