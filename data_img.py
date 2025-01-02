@@ -19,6 +19,7 @@ import cv2
 
 from typing import Optional, Sequence, Union, Callable
 from pathlib import Path
+from PIL.Image import Image
 
 # when loading multiple batches, just spit out n closest
 from sklearn.neighbors import NearestNeighbors
@@ -504,7 +505,6 @@ class WholeImageSet(ImageVectorDataSet):
 class BYOLVectorSet(ImageVectorDataSet):
     def __init__(self, dataset, getY: bool = True):
         # this needs to collect and attach the byol learner for embedding
-
         self.dataset = dataset  # the superior Img Vec Dataset
         self.X = VecGetter(self)
         if getY:
@@ -1016,6 +1016,8 @@ class LetterBox:
         if labels is None:
             labels = {}
         img = labels.get("img") if image is None else image
+        if isinstance(img, Image):
+            img = np.array(img)
         shape = img.shape[:2]  # current shape [height, width]
         new_shape = labels.pop("rect_shape", self.new_shape)
         if isinstance(new_shape, int):
