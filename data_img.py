@@ -6,7 +6,8 @@ Created on Mon Sep 30 16:41:05 2024
 @author: JSeaward
 """
 
-import os, pickle
+import os
+import pickle
 import numpy as np
 import pandas as pd
 from math import floor, ceil
@@ -17,22 +18,14 @@ import torch
 from torchvision.transforms import v2
 import cv2
 
-from typing import Optional, Sequence, Union, Callable, Literal
+from typing import Optional, Sequence, Union, Literal, Annotated, Tuple
 from pathlib import Path
 from PIL.Image import Image
 
-# when loading multiple batches, just spit out n closest
 from sklearn.neighbors import NearestNeighbors
 
+from byol_module import _collect_learner
 
-# what sklearn wants are big-ass arrays for X and y, stratified K-fold just gives indicies
-
-# TODO:
-#
-#       -- add train/test splitting to dataset object. maybe attach a torch DataLoader
-#       -- import joblib # for parallel saving and loading?
-
-# sampling options set later
 # %% Over-arching task-specific dataset classes. E.g. image sets for object detection, tabular classification sets, etc
 
 
@@ -126,13 +119,13 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
         self.X = self.vector_dataset.X
         self.y = self.vector_dataset.y
 
-    def __getitem__(self, idx: Union[int, Sequence[int]]):
+    def __getitem__(self, idx: Union[int, Sequence[int]]) -> Tuple:
         return self.vector_dataset[idx]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.vector_dataset)
 
-    def _get_image_norm_params(self):
+    def _get_image_norm_params(self) -> Tuple[np.ndarray, np.ndarray]:
         _laod_func = (
             test_load_fn(dims=(self.max_dim, self.max_dim))
             if self.max_dim is int
@@ -162,7 +155,7 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
 
         return px_mean, px_std
 
-    def _get_image_dims(self):
+    def _get_image_dims(self) -> Tuple[int, int, int]:
         """
         Utility function to scan the image directory and return the largest
         width and height out of all the images. For sizing the images when no
@@ -192,7 +185,7 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
             w = max(w, W)
         return h, w, mean
 
-    def _get_all_classes(self):
+    def _get_all_classes(self) -> Tuple[set, int, int]:
         """
         Utility function to find all classes in the dataset.
 
@@ -216,7 +209,9 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
             max_labs = max(max_labs, len(df))
         return labels, max_labs, count_labs
 
-    def get_objects(self, idx: int, return_df: bool = False):
+    def get_objects(
+        self, idx: int, return_df: bool = False
+    ) -> Union[zip, pd.DataFrame]:
         """
         Get the objects in an image; their image arrays, classes and the
         location of their top left corner in pixel coordinates, with origin at
@@ -257,8 +252,8 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
         if return_df:
             df["image"] = objs
             return df
-        else:
-            return zip(objs, classes, locs)
+
+        return zip(objs, classes, locs)
 
 
 # %% Load functions
@@ -295,7 +290,7 @@ class test_load_fn:
             ]
         )
 
-    def __call__(self, f: Union[str, Path]):
+    def __call__(self, f: Union[str, Path]) -> np.ndarray:
         im = ski.io.imread(f)
         im = self.transforms(im).numpy().transpose([1, 2, 0])
         return im
@@ -324,10 +319,10 @@ class test_load_fn:
 class torch_load_fn:
     def __init__(
         self,
-        dims=(640, 640),
-        means=[0.5479, 0.5197, 0.4716],
-        stds=[0.0498, 0.0468, 0.0421],
-        numpy=True,
+        dims: Annotated[Sequence[int], 2] = (640, 640),
+        means: Sequence[float] = [0.5479, 0.5197, 0.4716],
+        stds: Sequence[float] = [0.0498, 0.0468, 0.0421],
+        numpy: bool = True,
     ):
         self.dims = dims
         self.transforms = v2.Compose(
@@ -340,7 +335,7 @@ class torch_load_fn:
         )
         self.numpy = numpy
 
-    def __call__(self, f):
+    def __call__(self, f: Union[str, Path]) -> Union[np.ndarray, torch.Tensor]:
         im = ski.io.imread(f)
         im = (
             self.transforms(im).numpy().transpose([1, 2, 0])
@@ -366,7 +361,7 @@ class YOLO_Labels:
         """
         self.dataset = dataset
 
-    def get_label_df(self, idx: int):
+    def get_label_df(self, idx: int) -> pd.DataFrame:
         """
         Retrieve the labels for an image indexed in the dataset by idx.
 
@@ -392,7 +387,7 @@ class YOLO_Labels:
         )
         return df
 
-    def get_obj_bounds(self, idx: int):
+    def get_obj_bounds(self, idx: int) -> pd.DataFrame:
         """
         Retrieve the bounding boxes of the objects in an image in pixel coodinates.
 
@@ -440,11 +435,10 @@ class VecGetter:
         im, _ = self.vec_set[idx]
         return im
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.vec_set)
 
 
-### TODO: a pytorch version/flag
 class ImageVectorDataSet:
     # mostly for the getitem to get around the fact that imc doesn't want to give back from index lists
     def __init__(self, dataset, getY: bool = True):
@@ -470,7 +464,9 @@ class ImageVectorDataSet:
         if getY:
             self.y = self._get_y()
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self, idx: Union[int, np.ndarray, slice, Sequence[int]]
+    ) -> Tuple[Union[np.ndarray, torch.Tensor], Union[np.ndarray, torch.Tensor]]:
         ims = self.getvec_fn(idx)
         lbls = self.y[idx]
         if not self.dataset.numpy:
@@ -512,7 +508,7 @@ class ImageVectorDataSet:
         # else:
         #     raise Exception("Passed index is of unknown type.")
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.dataset.imc)
 
     def _get_y(self):
@@ -533,7 +529,9 @@ class ImageVectorDataSet:
 
 ## These are the things that get custom vectorization and labeling methods
 class WholeImageSet(ImageVectorDataSet):
-    def getvec_fn(self, idx: int):
+    def getvec_fn(
+        self, idx: Union[int, np.ndarray, slice, Sequence[int]]
+    ) -> Union[np.ndarray, torch.Tensor]:
         im = imc_framegetter(self.dataset.imc, idx)
         return np.array(im) if self.dataset.numpy else torch.Tensor(im)
 
@@ -543,12 +541,21 @@ class BYOLVectorSet(ImageVectorDataSet):
         # this needs to collect and attach the byol learner for embedding
         self.dataset = dataset  # the superior Img Vec Dataset
         self.X = VecGetter(self)
+        self.learner, _ = _collect_learner(
+            state_dict=self.dataset.embeddding_weights, im_sz=self.dataset.max_dim
+        )
+        self.learner.to(self.dataset.device)
         if getY:
             self.y = self._get_y()
 
-    def getvec_fn(self, idx: int):
+    def getvec_fn(
+        self, idx: Union[int, np.ndarray, slice, Sequence[int]]
+    ) -> Union[np.ndarray, torch.Tensor]:
         # this will get the embedding vectors with projection, embedding = learner(imgs.cuda(0), return_embedding=True)
-        pass
+        im = imc_framegetter(self.dataset.imc, idx)
+        im = torch.Tensor(im).to(self.dataset.device)
+        _, embedding = self.learner(im, return_embedding=True)
+        return embedding
 
 
 # class ImageVectorSet_old(ImageVectorDataSet):  # new one will usr some embedder or other
@@ -653,14 +660,39 @@ def imc_framegetter(
     idx: Union[int, np.ndarray, slice, Sequence[int]],
     pytorch: bool = False,
 ) -> Union[torch.Tensor, np.ndarray]:
+    """
+    Wrapper to make pulling from a acikit-learn ImageCollection more flexible.
+    Can take integers, sequences of integers or slcies and return stacks of either \
+    numpy arrays or torch tensors, depending on the pytorch bool or a flagon a custom load function
+    attached to the ImaceCollection.
+
+    Parameters
+    ----------
+    imc : ski.io.ImageCollection
+        ImageCollection to pull from.
+    idx : Union[int, np.ndarray, slice, Sequence[int]]
+        index(es) in `imc` to retireve.
+    pytorch : bool, optional
+        Whether or not to return torch tensors. Will be set by the `numpy` flag on
+        `imc.load_func` if one is present. The default is False.
+
+    Raises
+    ------
+    TypeError
+        When the `idx` passed outwits the logic of the function.
+
+    Returns
+    -------
+    torch.Tensor or np.ndarray
+        The images stacked along the 0th dimension.
+
+    """
     try:
         pytorch = not imc.load_func.numpy  # make both flags numpy or both pytorch
     except AttributeError:
         pass
-
-    if isinstance(
-        idx, tuple
-    ):  # to handle accidentally passed (data, label) pairs. May not be desired depending on pipeline.
+    # to handle accidentally passed (data, label) pairs. May not be desired depending on pipeline.
+    if isinstance(idx, tuple):
         idx = idx[0]
 
     if isinstance(idx, int):
@@ -669,8 +701,8 @@ def imc_framegetter(
         holder_ims = []
         if idx.start is None:
             start = 0
-        elif idx.start == -1:
-            start = len(imc)
+        elif idx.start < 0:
+            start = len(imc) + (idx.start + 1)
         else:
             start = idx.start
         if idx.stop is None or idx.stop == -1:
@@ -690,7 +722,7 @@ def imc_framegetter(
             holder_ims.append(im)
         return torch.stack(holder_ims) if pytorch else np.stack(holder_ims)
     else:
-        raise Exception("Passed index is of unknown type.")
+        raise TypeError("Passed index is of unknown type.")
 
 
 # class VAEImageCollectionSet(VisionDataset):
@@ -1109,8 +1141,8 @@ class NearestVectorCaller:
             if return_vecs:
                 outX, outY = self.call_vec_set(idxs_to_load)
                 return outX, outY, idxs_to_load
-            else:
-                return idxs_to_load
+
+            return idxs_to_load
 
         else:
             if k is None:
@@ -1121,8 +1153,8 @@ class NearestVectorCaller:
             if return_vecs:
                 outX, outY = self.call_vec_set(out_idxs)
                 return outX, outY, out_idxs
-            else:
-                return out_idxs
+
+            return out_idxs
 
     def call_vec_set(self, idx_RA):
         if len(idx_RA.shape) < 2:

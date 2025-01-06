@@ -24,7 +24,7 @@ from torchvision.transforms import v2
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange, tqdm
 
-from data_img import Img_VAE_Dataset, torch_load_fn
+from data_img import BTV_Image_Dataset, torch_load_fn
 
 
 # %% functions
@@ -60,7 +60,7 @@ def _collect_dataloader(
             transforms = torch_load_fn(dims=im_sz).transforms
             ds = datasets.Caltech256(path, transform=transforms)
         else:
-            ds = Img_VAE_Dataset(path, max_dim=im_sz, numpy=False)
+            ds = BTV_Image_Dataset(path, max_dim=im_sz, numpy=False)
     else:
         Path(path).mkdir(exist_ok=True, parents=True)
         ds = datasets.Caltech256(path, download=True)
@@ -202,8 +202,8 @@ def train(
         print(f"Model weights saved at {outpath}, with loss {bestloss:.4f}")
 
 
-def _old_test() -> Tuple[Img_VAE_Dataset, BYOL]:
-    ds = Img_VAE_Dataset("data/hardhat/test", max_dim=256, numpy=False)
+def _old_test() -> Tuple[BTV_Image_Dataset, BYOL]:
+    ds = BTV_Image_Dataset("data/hardhat/test", max_dim=256, numpy=False)
     resnet = models.resnet50().cuda(0)
     resnet.load_state_dict(torch.load("./improved-net_cuda.pt", weights_only=True))
     learner = BYOL(resnet, image_size=256, hidden_layer="avgpool")
