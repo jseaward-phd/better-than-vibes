@@ -17,9 +17,11 @@ import argparse
 from typing import Union, Optional, OrderedDict, Tuple
 
 import torch
+import numpy as np
 from byol_pytorch import BYOL
 from torchvision import models, datasets
 from torchvision.transforms import v2
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange, tqdm
 
 from data_img import Img_VAE_Dataset, torch_load_fn
@@ -166,8 +168,13 @@ def train(
     if outpath is not None:
         if Path(outpath).exists():
             raise FileExistsError("A file already exists at that location.")
+    writer = SummaryWriter(
+        log_dir=Path(outpath).parent.joinpath("tb_logs", Path(outpath).stem)
+    )
+    bestloss = 1e5
     try:
-        for _ in trange(epochs, unit="Epoch"):
+        for epoch in trange(epochs, unit="Epoch"):
+            losses = []
             for images, _ in tqdm(dataloader, unit="Batch", leave=False):
                 images = images.to(device)
                 loss = learner(images)
@@ -175,14 +182,24 @@ def train(
                 loss.backward()
                 opt.step()
                 learner.update_moving_average()  # update moving average of target encoder
+                losses.append(loss.detach().item())
+            meanloss = np.mean(losses)
+            writer.add_scalar("Loss/train", meanloss, epoch)
+            if meanloss < bestloss:
+                bestloss = meanloss
+                if outpath is not None:
+                    Path(os.path.split(outpath)[0]).mkdir(exist_ok=True, parents=True)
+                    torch.save(learner.net.state_dict(), outpath)
+
     except KeyboardInterrupt:
         pass
     torch.cuda.empty_cache()
-
+    writer.flush()
+    writer.close()
     if outpath is not None:
         Path(os.path.split(outpath)[0]).mkdir(exist_ok=True, parents=True)
         torch.save(learner.net.state_dict(), outpath)
-        print(f'Model weights saved at {outpath}')
+        print(f"Model weights saved at {outpath}, with loss {bestloss:.4f}")
 
 
 def _old_test() -> Tuple[Img_VAE_Dataset, BYOL]:

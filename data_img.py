@@ -17,7 +17,7 @@ import torch
 from torchvision.transforms import v2
 import cv2
 
-from typing import Optional, Sequence, Union, Callable
+from typing import Optional, Sequence, Union, Callable, Literal
 from pathlib import Path
 from PIL.Image import Image
 
@@ -37,40 +37,62 @@ from sklearn.neighbors import NearestNeighbors
 
 
 # may want to make a flag to save processed data arrays
-class Img_VAE_Dataset:  # rename since using BYOL approach, also make torch option
+class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch option
     def __init__(
         self,
-        train_dir_path: str,
+        train_dir_path: Union[str, Path],
         max_dim: Optional[int] = None,
+        imvec_type: Literal["whole", "byol"] = "whole",
+        embeddding_weights: Optional[Union[str, Path]] = None,
         label_type: str = "yolo",
         numpy: bool = False,
+        device: Union[int, str, torch.device] = torch.device("cuda"),
     ):
         """
         Dataset for object detection in images using bounding boxes.
 
         Parameters
         ----------
-        train_dir_path : str
+        train_dir_path : str | Path
             Path to the dataset folder containg two subfolders: "images" and "labels"
         max_dim : int, optional
             Maximum dimension the images can take in eiterdimension. If passed, i
             mages will be padded and rescalled to be a square of this dimesion
             for uniformity.
             The default is 256. Setting to None will pad all images to match the largest in the set.
+        imvec_type : Literal['whole','byol']
+            Type of image vector to return. CCurrent options are 'whole' images, or 'byol' embeddings.
+            if 'byol' (Bootstrap Your Own Latent) is passed, a path to the resnet50 model weights must also be passed.
+            The default is 'whole.'
+        embedding_weights : Optional[Union[str, Path]]
+            Path to resnet50 weights model weights for byol embedding. Required for imvec_type == 'byol'.
+            The default is None.
         label_type : str, optional
             For using differen bounding box labels. The default, and currently only,
             value is "yolo".
+        numpy : bool, optional
+            Flag to return numpy arrays. The default is False, return pytorch Tensors.
+        device : Union[int, str, torch.device]
+            Device to cast the Pytorch tensors to. PAss 'cpu' foor cpu.
+            The default is torch.device("cuda").
 
         Returns
         -------
         None.
 
         """
+        if imvec_type == "byol":
+            assert (
+                embeddding_weights is not None
+            ), "Must provide path to resnet50 weights for byol embedding."
+        self.imvec_type = imvec_type
+        self.embeddding_weights = embeddding_weights
         self.trainpath = train_dir_path
         self.img_path = os.path.join(self.trainpath, "images/")  # could make suffix arg
         self.label_path = os.path.join(self.trainpath, "labels/")
         self.max_dim = max_dim
         self.numpy = numpy
+        self.device = device
         ## make different modules for differen label types
         if label_type == "yolo":
             self.label_module = YOLO_Labels(self)
@@ -93,9 +115,16 @@ class Img_VAE_Dataset:  # rename since using BYOL approach, also make torch opti
         # self.img_vec_channel_length = max_height * max_width will do thhis wth a VAE
         self.classes, self.max_objs, self.obj_count = self._get_all_classes()
 
-        self.vector_dataset = WholeImageSet(self)
-
+        if self.imvec_type == "whole":
+            self.vector_dataset = WholeImageSet(self)
+        elif self.imvec_type == "byol":
+            self.vector_dataset = BYOLVectorSet(self)  # TODO: check after writing class
+        # elif self.imvec_type == 'somethingelse':
+        #     etc...
         # self.obj_vec_set = ObjectVectorSet(self)
+
+        self.X = self.vector_dataset.X
+        self.y = self.vector_dataset.y
 
     def __getitem__(self, idx: Union[int, Sequence[int]]):
         return self.vector_dataset[idx]
@@ -233,24 +262,24 @@ class Img_VAE_Dataset:  # rename since using BYOL approach, also make torch opti
 
 
 # %% Load functions
-class og_load_fn:
-    def __init__(self, max_dim: Union[int, Sequence[int]]):
-        if isinstance(self.dims, int):
-            self.max_dim = max_dim
-        else:
-            self.max_dim = max(max_dim)
+# class og_load_fn:
+#     def __init__(self, max_dim: Union[int, Sequence[int]]):
+#         if isinstance(self.dims, int):
+#             self.max_dim = max_dim
+#         else:
+#             self.max_dim = max(max_dim)
 
-    def __call__(self, f: Union[str, Path]):
-        im = ski.io.imread(f)
-        if self.max_dim is not None:
-            aspect = im.shape[1] / im.shape[0]
-            if aspect > 1:  # short image
-                h = int(self.max_dim / aspect)
-                im = ski.transform.resize(im, [h, self.max_dim])
-            else:  # wide image
-                w = int(self.max_dim * aspect)
-                im = ski.transform.resize(im, [self.max_dim, w])
-        return im
+#     def __call__(self, f: Union[str, Path]):
+#         im = ski.io.imread(f)
+#         if self.max_dim is not None:
+#             aspect = im.shape[1] / im.shape[0]
+#             if aspect > 1:  # short image
+#                 h = int(self.max_dim / aspect)
+#                 im = ski.transform.resize(im, [h, self.max_dim])
+#             else:  # wide image
+#                 w = int(self.max_dim * aspect)
+#                 im = ski.transform.resize(im, [self.max_dim, w])
+#         return im
 
 
 class test_load_fn:
@@ -272,24 +301,24 @@ class test_load_fn:
         return im
 
 
-class torch_load_fn_old:
-    def __init__(self, dims):
-        self.dims = dims
-        self.transforms = v2.Compose(
-            [
-                v2.ToImage(),
-                v2.Resize(self.dims),  # (None,max_size), yolo default is (640,640)
-                v2.ToDtype(torch.float32, scale=True),
-                v2.Normalize(
-                    mean=[0.5479, 0.5197, 0.4716], std=[0.0498, 0.0468, 0.0421]
-                ),
-            ]
-        )
+# class torch_load_fn_old:
+#     def __init__(self, dims):
+#         self.dims = dims
+#         self.transforms = v2.Compose(
+#             [
+#                 v2.ToImage(),
+#                 v2.Resize(self.dims),  # (None,max_size), yolo default is (640,640)
+#                 v2.ToDtype(torch.float32, scale=True),
+#                 v2.Normalize(
+#                     mean=[0.5479, 0.5197, 0.4716], std=[0.0498, 0.0468, 0.0421]
+#                 ),
+#             ]
+#         )
 
-    def __call__(self, f):
-        im = ski.io.imread(f)
-        im = self.transforms(im).numpy().transpose([1, 2, 0])
-        return im
+#     def __call__(self, f):
+#         im = ski.io.imread(f)
+#         im = self.transforms(im).numpy().transpose([1, 2, 0])
+#         return im
 
 
 class torch_load_fn:
@@ -442,39 +471,46 @@ class ImageVectorDataSet:
             self.y = self._get_y()
 
     def __getitem__(self, idx):
-        if isinstance(idx, tuple):
-            idx = idx[0]
+        ims = self.getvec_fn(idx)
+        lbls = self.y[idx]
+        if not self.dataset.numpy:
+            ims.to(self.dataset.device)
+            lbls.to(self.dataset.device)
+        return ims, lbls
+        # refactor this and the getvec fns to use imc_framegetter for the images, then convert to vectors
+        # if isinstance(idx, tuple):
+        #     idx = idx[0]
 
-        if isinstance(idx, int):
-            return self.getvec_fn(idx)
-        elif isinstance(idx, slice):
-            holder_vecs, holder_labs = [], []
-            if idx.start is None:
-                start = 0
-            elif idx.start == -1:
-                start = len(self)
-            else:
-                start = idx.start
-            if idx.stop is None or idx.stop == -1:
-                stop = len(self)
-            else:
-                stop = idx.stop
-            stop = idx.stop if idx.stop is not None else len(self)
-            step = idx.step if idx.step is not None else 1
-            for i in range(start, stop, step):
-                vec, labs = self.getvec_fn(i)
-                holder_vecs.append(vec)
-                holder_labs.append(labs)
-            return np.stack(holder_vecs), np.stack(holder_labs)
-        elif isinstance(idx, (list, np.ndarray)):
-            holder_vecs, holder_labs = [], []
-            for i in idx:
-                vec, labs = self.getvec_fn(i)
-                holder_vecs.append(vec)
-                holder_labs.append(labs)
-            return np.stack(holder_vecs), np.stack(holder_labs)
-        else:
-            raise Exception("Passed index is of unknown type.")
+        # if isinstance(idx, int):
+        #     return self.getvec_fn(idx)
+        # elif isinstance(idx, slice):
+        #     holder_vecs, holder_labs = [], []
+        #     if idx.start is None:
+        #         start = 0
+        #     elif idx.start == -1:
+        #         start = len(self)
+        #     else:
+        #         start = idx.start
+        #     if idx.stop is None or idx.stop == -1:
+        #         stop = len(self)
+        #     else:
+        #         stop = idx.stop
+        #     stop = idx.stop if idx.stop is not None else len(self)
+        #     step = idx.step if idx.step is not None else 1
+        #     for i in range(start, stop, step):
+        #         vec, labs = self.getvec_fn(i)
+        #         holder_vecs.append(vec)
+        #         holder_labs.append(labs)
+        #     return np.stack(holder_vecs), np.stack(holder_labs)
+        # elif isinstance(idx, (list, np.ndarray)):
+        #     holder_vecs, holder_labs = [], []
+        #     for i in idx:
+        #         vec, labs = self.getvec_fn(i)
+        #         holder_vecs.append(vec)
+        #         holder_labs.append(labs)
+        #     return np.stack(holder_vecs), np.stack(holder_labs)
+        # else:
+        #     raise Exception("Passed index is of unknown type.")
 
     def __len__(self):
         return len(self.dataset.imc)
@@ -487,19 +523,19 @@ class ImageVectorDataSet:
             for label in set(df["class"]):
                 labs_binary[label] = 1
             all_labels.append(labs_binary)
-        y = np.stack(all_labels)
+        y = (
+            np.stack(all_labels)
+            if self.dataset.numpy
+            else torch.stack([torch.Tensor(x) for x in all_labels])
+        )
         return y
 
 
-## These are the things that get custom vectorization methods
+## These are the things that get custom vectorization and labeling methods
 class WholeImageSet(ImageVectorDataSet):
     def getvec_fn(self, idx: int):
         im = imc_framegetter(self.dataset.imc, idx)
-        df = self.dataset.label_module.get_label_df(idx)
-        labs_binary = [0] * len(self.dataset.classes)
-        for label in set(df["class"]):
-            labs_binary[label] = 1  # make binary vector for **presence** of object
-        return np.array(im), np.array(labs_binary)
+        return np.array(im) if self.dataset.numpy else torch.Tensor(im)
 
 
 class BYOLVectorSet(ImageVectorDataSet):
@@ -515,36 +551,36 @@ class BYOLVectorSet(ImageVectorDataSet):
         pass
 
 
-class ImageVectorSet_old(ImageVectorDataSet):  # new one will usr some embedder or other
-    """
-    Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
-    """
+# class ImageVectorSet_old(ImageVectorDataSet):  # new one will usr some embedder or other
+#     """
+#     Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
+#     """
 
-    def getvec_fn(self, idx: int):
-        """
-        Gets the image vector for the image indexed by idx in the attached dataset.
-        Makes a binary label for vector of length == number of classes in the dataset.
-        A 1 in the lebel vector indicates an object is present. Uset to support
-        the__getitem__ function of this class so that that function can accept slices.
+#     def getvec_fn(self, idx: int):
+#         """
+#         Gets the image vector for the image indexed by idx in the attached dataset.
+#         Makes a binary label for vector of length == number of classes in the dataset.
+#         A 1 in the lebel vector indicates an object is present. Uset to support
+#         the__getitem__ function of this class so that that function can accept slices.
 
-        Parameters
-        ----------
-        idx : int
-            Index of image in underlying set
+#         Parameters
+#         ----------
+#         idx : int
+#             Index of image in underlying set
 
-        Returns
-        -------
-        array
-            Single data vector and label as (array, array)
+#         Returns
+#         -------
+#         array
+#             Single data vector and label as (array, array)
 
-        """
-        im = imc_framegetter(self.dataset.imc, idx)
-        df = self.dataset.label_module.get_label_df(idx)
-        im_vec = im2vec(im, self.dataset.img_vec_channel_length)
-        labs_binary = [0] * len(self.dataset.classes)
-        for label in set(df["class"]):
-            labs_binary[label] = 1  # make binary vector for **presence** of object
-        return np.array(im_vec), np.array(labs_binary)
+#         """
+#         im = imc_framegetter(self.dataset.imc, idx)
+#         df = self.dataset.label_module.get_label_df(idx)
+#         im_vec = im2vec(im, self.dataset.img_vec_channel_length)
+#         labs_binary = [0] * len(self.dataset.classes)
+#         for label in set(df["class"]):
+#             labs_binary[label] = 1  # make binary vector for **presence** of object
+#         return np.array(im_vec), np.array(labs_binary)
 
 
 class ObjectVectorSet(ImageVectorDataSet):
@@ -564,6 +600,360 @@ class ObjectVectorSet(ImageVectorDataSet):
 
     def __len__(self):
         return self.dataset.obj_count
+
+
+# %% Utility Functions
+
+# from torchvision.datasets.vision import VisionDataset
+
+
+# class IMCWrapper(ski.io.ImageCollection):
+#     def __init__(self, imc):
+#         self.imc = imc
+
+#     def __len__(self):
+#         return len(self.imc)
+
+#     def __getitem__(self, idx):
+#         if isinstance(idx, tuple):
+#             idx = idx[0]
+
+#         if isinstance(idx, int):
+#             return self.imc[idx]
+#         elif isinstance(idx, slice):
+#             holder_ims = []
+#             if idx.start is None:
+#                 start = 0
+#             elif idx.start == -1:
+#                 start = len(self.imc)
+#             else:
+#                 start = idx.start
+#             if idx.stop is None or idx.stop == -1:
+#                 stop = len(self.imc)
+#             else:
+#                 stop = idx.stop
+#             stop = idx.stop if idx.stop is not None else len(self.imc)
+#             step = idx.step if idx.step is not None else 1
+#             for i in range(start, stop, step):
+#                 im = self.imc[i]
+#                 holder_ims.append(im)
+#             return np.stack(holder_ims)
+#         elif isinstance(idx, (list, np.ndarray)):
+#             holder_ims = []
+#             for i in idx:
+#                 im = self.imc[i]
+#                 holder_ims.append(im)
+#             return np.stack(holder_ims)
+#         else:
+#             raise Exception("Passed index is of unknown type.")
+
+
+def imc_framegetter(
+    imc: ski.io.ImageCollection,
+    idx: Union[int, np.ndarray, slice, Sequence[int]],
+    pytorch: bool = False,
+) -> Union[torch.Tensor, np.ndarray]:
+    try:
+        pytorch = not imc.load_func.numpy  # make both flags numpy or both pytorch
+    except AttributeError:
+        pass
+
+    if isinstance(
+        idx, tuple
+    ):  # to handle accidentally passed (data, label) pairs. May not be desired depending on pipeline.
+        idx = idx[0]
+
+    if isinstance(idx, int):
+        return imc[idx]
+    elif isinstance(idx, slice):
+        holder_ims = []
+        if idx.start is None:
+            start = 0
+        elif idx.start == -1:
+            start = len(imc)
+        else:
+            start = idx.start
+        if idx.stop is None or idx.stop == -1:
+            stop = len(imc)
+        else:
+            stop = idx.stop
+        stop = idx.stop if idx.stop is not None else len(imc)
+        step = idx.step if idx.step is not None else 1
+        for i in range(start, stop, step):
+            im = imc[i]
+            holder_ims.append(im)
+        return torch.stack(holder_ims) if pytorch else np.stack(holder_ims)
+    elif isinstance(idx, (list, np.ndarray)):
+        holder_ims = []
+        for i in idx:
+            im = imc[i]
+            holder_ims.append(im)
+        return torch.stack(holder_ims) if pytorch else np.stack(holder_ims)
+    else:
+        raise Exception("Passed index is of unknown type.")
+
+
+# class VAEImageCollectionSet(VisionDataset):
+#     # Obselete
+#     def __init__(
+#         self,
+#         imc: ski.io.ImageCollection,
+#         split: str,
+#         transform: Optional[Callable] = None,
+#     ):
+#         self.split = split
+#         self.imc = imc
+#         self.transform = transform
+
+#     def __len__(self):
+#         return len(self.imc)
+
+#     def __getitem__(self, idx: int):
+#         im = self.imc[idx]
+#         if self.transform is not None:
+#             im = self.transform(im)
+#         return im, torch.zeros(40, dtype=int)
+
+
+# def im2vec(im, img_vec_channel_length):
+#     # Obselete, doesn't work with knn
+#     """
+#     Naïvely Converts an image array to a vector.
+
+#     Parameters
+#     ----------
+#     im : array
+#         Image to convert.
+#     img_vec_channel_length : int
+#         Number of pixels in each channel in the image; i.e. width * height
+
+#     Returns
+#     -------
+#     holder : list
+#         Vector of the image, padded at the end of each channel with 0.
+
+#     """
+#     if len(im.shape) > 2:
+#         holder = []
+#         for ch in range(im.shape[2]):
+#             data = list(np.ravel(im[:, :, ch]))
+#             holder += data + [0] * (img_vec_channel_length - len(data))
+#     else:
+#         data = list(np.ravel(im))
+#         holder = data + [0] * (img_vec_channel_length - len(data))
+#     return holder
+
+
+# def pad_resize_im(im, size=None):
+#     # obselete, superceded by LetterBox
+#     """
+#     Pad and resize image to a specified size (height by width)
+
+#     Parameters
+#     ----------
+#     im : array
+#         The image to resize.
+#     size : iterable, optional
+#         Dimensions (H, W) to output. The default is None, i.e. only pad.
+
+#     Returns
+#     -------
+#     padded_image : array
+#         Padded/resized image.
+
+#     """
+#     amount = int(abs(im.shape[0] - im.shape[1]) / 2)
+#     pad_tuple = (
+#         ((0, 0), (amount, amount), (0, 0))
+#         if im.shape[1] < im.shape[0]
+#         else ((amount, amount), (0, 0), (0, 0))
+#     )
+#     padded_image = np.pad(
+#         im,
+#         pad_tuple,
+#         mode="constant",
+#         constant_values=0,
+#     )
+#     if size is not None:
+#         padded_image = ski.transform.resize(padded_image, [size, size])
+#     return padded_image
+
+
+# def build_umap_reducer(ivds, embedding_dim=256, metric="cosine", block_frac=1):
+#     block_sz = len(ivds) * block_frac
+#     reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
+#     for ...:
+#     return reducer
+
+
+# ripped off from ultralytics to make image argument in __call__ come first
+class LetterBox:
+    """
+    Resize image and padding for detection, instance segmentation, pose.
+
+    This class resizes and pads images to a specified shape while preserving aspect ratio. It also updates
+    corresponding labels and bounding boxes.
+
+    Attributes:
+        new_shape (tuple): Target shape (height, width) for resizing.
+        auto (bool): Whether to use minimum rectangle.
+        scaleFill (bool): Whether to stretch the image to new_shape.
+        scaleup (bool): Whether to allow scaling up. If False, only scale down.
+        stride (int): Stride for rounding padding.
+        center (bool): Whether to center the image or align to top-left.
+
+    Methods:
+        __call__: Resize and pad image, update labels and bounding boxes.
+
+    Examples:
+        >>> transform = LetterBox(new_shape=(640, 640))
+        >>> result = transform(labels)
+        >>> resized_img = result["img"]
+        >>> updated_instances = result["instances"]
+    """
+
+    def __init__(
+        self,
+        new_shape=(640, 640),
+        auto=False,
+        scaleFill=False,
+        scaleup=True,
+        center=True,
+        stride=32,
+    ):
+        """
+        Initialize LetterBox object for resizing and padding images.
+
+        This class is designed to resize and pad images for object detection, instance segmentation, and pose estimation
+        tasks. It supports various resizing modes including auto-sizing, scale-fill, and letterboxing.
+
+        Args:
+            new_shape (Tuple[int, int]): Target size (height, width) for the resized image.
+            auto (bool): If True, use minimum rectangle to resize. If False, use new_shape directly.
+            scaleFill (bool): If True, stretch the image to new_shape without padding.
+            scaleup (bool): If True, allow scaling up. If False, only scale down.
+            center (bool): If True, center the placed image. If False, place image in top-left corner.
+            stride (int): Stride of the model (e.g., 32 for YOLOv5).
+
+        Attributes:
+            new_shape (Tuple[int, int]): Target size for the resized image.
+            auto (bool): Flag for using minimum rectangle resizing.
+            scaleFill (bool): Flag for stretching image without padding.
+            scaleup (bool): Flag for allowing upscaling.
+            stride (int): Stride value for ensuring image size is divisible by stride.
+
+        Examples:
+            >>> letterbox = LetterBox(new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, stride=32)
+            >>> resized_img = letterbox(original_img)
+        """
+        self.new_shape = new_shape
+        self.auto = auto
+        self.scaleFill = scaleFill
+        self.scaleup = scaleup
+        self.stride = stride
+        self.center = center  # Put the image in the middle or top-left
+
+    def __call__(self, image=None, labels=None):
+        """
+        Resizes and pads an image for object detection, instance segmentation, or pose estimation tasks.
+
+        This method applies letterboxing to the input image, which involves resizing the image while maintaining its
+        aspect ratio and adding padding to fit the new shape. It also updates any associated labels accordingly.
+
+        Args:
+            labels (Dict | None): A dictionary containing image data and associated labels, or empty dict if None.
+            image (np.ndarray | None): The input image as a numpy array. If None, the image is taken from 'labels'.
+
+        Returns:
+            (Dict | Tuple): If 'labels' is provided, returns an updated dictionary with the resized and padded image,
+                updated labels, and additional metadata. If 'labels' is empty, returns a tuple containing the resized
+                and padded image, and a tuple of (ratio, (left_pad, top_pad)).
+
+        Examples:
+            >>> letterbox = LetterBox(new_shape=(640, 640))
+            >>> result = letterbox(labels={"img": np.zeros((480, 640, 3)), "instances": Instances(...)})
+            >>> resized_img = result["img"]
+            >>> updated_instances = result["instances"]
+        """
+        if labels is None:
+            labels = {}
+        img = labels.get("img") if image is None else image
+        if isinstance(img, Image):
+            img = np.array(img)
+        shape = img.shape[:2]  # current shape [height, width]
+        new_shape = labels.pop("rect_shape", self.new_shape)
+        if isinstance(new_shape, int):
+            new_shape = (new_shape, new_shape)
+
+        # Scale ratio (new / old)
+        r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+        if not self.scaleup:  # only scale down, do not scale up (for better val mAP)
+            r = min(r, 1.0)
+
+        # Compute padding
+        ratio = r, r  # width, height ratios
+        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+        dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
+        if self.auto:  # minimum rectangle
+            dw, dh = np.mod(dw, self.stride), np.mod(dh, self.stride)  # wh padding
+        elif self.scaleFill:  # stretch
+            dw, dh = 0.0, 0.0
+            new_unpad = (new_shape[1], new_shape[0])
+            ratio = (
+                new_shape[1] / shape[1],
+                new_shape[0] / shape[0],
+            )  # width, height ratios
+
+        if self.center:
+            dw /= 2  # divide padding into 2 sides
+            dh /= 2
+
+        if shape[::-1] != new_unpad:  # resize
+            img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
+        top, bottom = int(round(dh - 0.1)) if self.center else 0, int(round(dh + 0.1))
+        left, right = int(round(dw - 0.1)) if self.center else 0, int(round(dw + 0.1))
+        img = cv2.copyMakeBorder(
+            img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
+        )  # add border
+        if labels.get("ratio_pad"):
+            labels["ratio_pad"] = (labels["ratio_pad"], (left, top))  # for evaluation
+
+        if len(labels):
+            labels = self._update_labels(labels, ratio, left, top)
+            labels["img"] = img
+            labels["resized_shape"] = new_shape
+            return labels
+        else:
+            return img
+
+    def _update_labels(self, labels, ratio, padw, padh):
+        """
+        Updates labels after applying letterboxing to an image.
+
+        This method modifies the bounding box coordinates of instances in the labels
+        to account for resizing and padding applied during letterboxing.
+
+        Args:
+            labels (Dict): A dictionary containing image labels and instances.
+            ratio (Tuple[float, float]): Scaling ratios (width, height) applied to the image.
+            padw (float): Padding width added to the image.
+            padh (float): Padding height added to the image.
+
+        Returns:
+            (Dict): Updated labels dictionary with modified instance coordinates.
+
+        Examples:
+            >>> letterbox = LetterBox(new_shape=(640, 640))
+            >>> labels = {"instances": Instances(...)}
+            >>> ratio = (0.5, 0.5)
+            >>> padw, padh = 10, 20
+            >>> updated_labels = letterbox._update_labels(labels, ratio, padw, padh)
+        """
+        labels["instances"].convert_bbox(format="xyxy")
+        labels["instances"].denormalize(*labels["img"].shape[:2][::-1])
+        labels["instances"].scale(*ratio)
+        labels["instances"].add_padding(padw, padh)
+        return labels
 
 
 # %% For doing knn on datasets whose vector sets are too big to fit in memmory.
@@ -753,342 +1143,3 @@ class NearestVectorCaller:
 
     def get_knn_by_idx(self, idx_RA):
         out_X, out_y = self.call_vec_set(idx_RA)
-
-
-# %% Utility Functions
-from torchvision.datasets.vision import VisionDataset
-
-
-# class IMCWrapper(ski.io.ImageCollection):
-#     def __init__(self, imc):
-#         self.imc = imc
-
-#     def __len__(self):
-#         return len(self.imc)
-
-#     def __getitem__(self, idx):
-#         if isinstance(idx, tuple):
-#             idx = idx[0]
-
-#         if isinstance(idx, int):
-#             return self.imc[idx]
-#         elif isinstance(idx, slice):
-#             holder_ims = []
-#             if idx.start is None:
-#                 start = 0
-#             elif idx.start == -1:
-#                 start = len(self.imc)
-#             else:
-#                 start = idx.start
-#             if idx.stop is None or idx.stop == -1:
-#                 stop = len(self.imc)
-#             else:
-#                 stop = idx.stop
-#             stop = idx.stop if idx.stop is not None else len(self.imc)
-#             step = idx.step if idx.step is not None else 1
-#             for i in range(start, stop, step):
-#                 im = self.imc[i]
-#                 holder_ims.append(im)
-#             return np.stack(holder_ims)
-#         elif isinstance(idx, (list, np.ndarray)):
-#             holder_ims = []
-#             for i in idx:
-#                 im = self.imc[i]
-#                 holder_ims.append(im)
-#             return np.stack(holder_ims)
-#         else:
-#             raise Exception("Passed index is of unknown type.")
-
-
-def imc_framegetter(imc, idx):
-    if isinstance(idx, tuple):
-        idx = idx[0]
-
-    if isinstance(idx, int):
-        return imc[idx]
-    elif isinstance(idx, slice):
-        holder_ims = []
-        if idx.start is None:
-            start = 0
-        elif idx.start == -1:
-            start = len(imc)
-        else:
-            start = idx.start
-        if idx.stop is None or idx.stop == -1:
-            stop = len(imc)
-        else:
-            stop = idx.stop
-        stop = idx.stop if idx.stop is not None else len(imc)
-        step = idx.step if idx.step is not None else 1
-        for i in range(start, stop, step):
-            im = imc[i]
-            holder_ims.append(im)
-        return np.stack(holder_ims)
-    elif isinstance(idx, (list, np.ndarray)):
-        holder_ims = []
-        for i in idx:
-            im = imc[i]
-            holder_ims.append(im)
-        return np.stack(holder_ims)
-    else:
-        raise Exception("Passed index is of unknown type.")
-
-
-class VAEImageCollectionSet(VisionDataset):
-    def __init__(
-        self,
-        imc: ski.io.ImageCollection,
-        split: str,
-        transform: Optional[Callable] = None,
-    ):
-        self.split = split
-        self.imc = imc
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.imc)
-
-    def __getitem__(self, idx: int):
-        im = self.imc[idx]
-        if self.transform is not None:
-            im = self.transform(im)
-        return im, torch.zeros(40, dtype=int)
-
-
-def im2vec(im, img_vec_channel_length):
-    """
-    Converts an image array to a vector.
-
-    Parameters
-    ----------
-    im : array
-        Image to convert.
-    img_vec_channel_length : int
-        Number of pixels in each channel in the image; i.e. width * height
-
-    Returns
-    -------
-    holder : list
-        Vector of the image, padded at the end of each channel with 0.
-
-    """
-    if len(im.shape) > 2:
-        holder = []
-        for ch in range(im.shape[2]):
-            data = list(np.ravel(im[:, :, ch]))
-            holder += data + [0] * (img_vec_channel_length - len(data))
-    else:
-        data = list(np.ravel(im))
-        holder = data + [0] * (img_vec_channel_length - len(data))
-    return holder
-
-
-def pad_resize_im(im, size=None):
-    """
-    Pad and resize image to a specified size (height by width)
-
-    Parameters
-    ----------
-    im : array
-        The image to resize.
-    size : iterable, optional
-        Dimensions (H, W) to output. The default is None, i.e. only pad.
-
-    Returns
-    -------
-    padded_image : array
-        Padded/resized image.
-
-    """
-    amount = int(abs(im.shape[0] - im.shape[1]) / 2)
-    pad_tuple = (
-        ((0, 0), (amount, amount), (0, 0))
-        if im.shape[1] < im.shape[0]
-        else ((amount, amount), (0, 0), (0, 0))
-    )
-    padded_image = np.pad(
-        im,
-        pad_tuple,
-        mode="constant",
-        constant_values=0,
-    )
-    if size is not None:
-        padded_image = ski.transform.resize(padded_image, [size, size])
-    return padded_image
-
-
-# def build_umap_reducer(ivds, embedding_dim=256, metric="cosine", block_frac=1):
-#     block_sz = len(ivds) * block_frac
-#     reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
-#     for ...:
-#     return reducer
-
-
-# ripped off from ultralytics to make image argument in __call__ come first
-class LetterBox:
-    """
-    Resize image and padding for detection, instance segmentation, pose.
-
-    This class resizes and pads images to a specified shape while preserving aspect ratio. It also updates
-    corresponding labels and bounding boxes.
-
-    Attributes:
-        new_shape (tuple): Target shape (height, width) for resizing.
-        auto (bool): Whether to use minimum rectangle.
-        scaleFill (bool): Whether to stretch the image to new_shape.
-        scaleup (bool): Whether to allow scaling up. If False, only scale down.
-        stride (int): Stride for rounding padding.
-        center (bool): Whether to center the image or align to top-left.
-
-    Methods:
-        __call__: Resize and pad image, update labels and bounding boxes.
-
-    Examples:
-        >>> transform = LetterBox(new_shape=(640, 640))
-        >>> result = transform(labels)
-        >>> resized_img = result["img"]
-        >>> updated_instances = result["instances"]
-    """
-
-    def __init__(
-        self,
-        new_shape=(640, 640),
-        auto=False,
-        scaleFill=False,
-        scaleup=True,
-        center=True,
-        stride=32,
-    ):
-        """
-        Initialize LetterBox object for resizing and padding images.
-
-        This class is designed to resize and pad images for object detection, instance segmentation, and pose estimation
-        tasks. It supports various resizing modes including auto-sizing, scale-fill, and letterboxing.
-
-        Args:
-            new_shape (Tuple[int, int]): Target size (height, width) for the resized image.
-            auto (bool): If True, use minimum rectangle to resize. If False, use new_shape directly.
-            scaleFill (bool): If True, stretch the image to new_shape without padding.
-            scaleup (bool): If True, allow scaling up. If False, only scale down.
-            center (bool): If True, center the placed image. If False, place image in top-left corner.
-            stride (int): Stride of the model (e.g., 32 for YOLOv5).
-
-        Attributes:
-            new_shape (Tuple[int, int]): Target size for the resized image.
-            auto (bool): Flag for using minimum rectangle resizing.
-            scaleFill (bool): Flag for stretching image without padding.
-            scaleup (bool): Flag for allowing upscaling.
-            stride (int): Stride value for ensuring image size is divisible by stride.
-
-        Examples:
-            >>> letterbox = LetterBox(new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, stride=32)
-            >>> resized_img = letterbox(original_img)
-        """
-        self.new_shape = new_shape
-        self.auto = auto
-        self.scaleFill = scaleFill
-        self.scaleup = scaleup
-        self.stride = stride
-        self.center = center  # Put the image in the middle or top-left
-
-    def __call__(self, image=None, labels=None):
-        """
-        Resizes and pads an image for object detection, instance segmentation, or pose estimation tasks.
-
-        This method applies letterboxing to the input image, which involves resizing the image while maintaining its
-        aspect ratio and adding padding to fit the new shape. It also updates any associated labels accordingly.
-
-        Args:
-            labels (Dict | None): A dictionary containing image data and associated labels, or empty dict if None.
-            image (np.ndarray | None): The input image as a numpy array. If None, the image is taken from 'labels'.
-
-        Returns:
-            (Dict | Tuple): If 'labels' is provided, returns an updated dictionary with the resized and padded image,
-                updated labels, and additional metadata. If 'labels' is empty, returns a tuple containing the resized
-                and padded image, and a tuple of (ratio, (left_pad, top_pad)).
-
-        Examples:
-            >>> letterbox = LetterBox(new_shape=(640, 640))
-            >>> result = letterbox(labels={"img": np.zeros((480, 640, 3)), "instances": Instances(...)})
-            >>> resized_img = result["img"]
-            >>> updated_instances = result["instances"]
-        """
-        if labels is None:
-            labels = {}
-        img = labels.get("img") if image is None else image
-        if isinstance(img, Image):
-            img = np.array(img)
-        shape = img.shape[:2]  # current shape [height, width]
-        new_shape = labels.pop("rect_shape", self.new_shape)
-        if isinstance(new_shape, int):
-            new_shape = (new_shape, new_shape)
-
-        # Scale ratio (new / old)
-        r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-        if not self.scaleup:  # only scale down, do not scale up (for better val mAP)
-            r = min(r, 1.0)
-
-        # Compute padding
-        ratio = r, r  # width, height ratios
-        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-        dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
-        if self.auto:  # minimum rectangle
-            dw, dh = np.mod(dw, self.stride), np.mod(dh, self.stride)  # wh padding
-        elif self.scaleFill:  # stretch
-            dw, dh = 0.0, 0.0
-            new_unpad = (new_shape[1], new_shape[0])
-            ratio = (
-                new_shape[1] / shape[1],
-                new_shape[0] / shape[0],
-            )  # width, height ratios
-
-        if self.center:
-            dw /= 2  # divide padding into 2 sides
-            dh /= 2
-
-        if shape[::-1] != new_unpad:  # resize
-            img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-        top, bottom = int(round(dh - 0.1)) if self.center else 0, int(round(dh + 0.1))
-        left, right = int(round(dw - 0.1)) if self.center else 0, int(round(dw + 0.1))
-        img = cv2.copyMakeBorder(
-            img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
-        )  # add border
-        if labels.get("ratio_pad"):
-            labels["ratio_pad"] = (labels["ratio_pad"], (left, top))  # for evaluation
-
-        if len(labels):
-            labels = self._update_labels(labels, ratio, left, top)
-            labels["img"] = img
-            labels["resized_shape"] = new_shape
-            return labels
-        else:
-            return img
-
-    def _update_labels(self, labels, ratio, padw, padh):
-        """
-        Updates labels after applying letterboxing to an image.
-
-        This method modifies the bounding box coordinates of instances in the labels
-        to account for resizing and padding applied during letterboxing.
-
-        Args:
-            labels (Dict): A dictionary containing image labels and instances.
-            ratio (Tuple[float, float]): Scaling ratios (width, height) applied to the image.
-            padw (float): Padding width added to the image.
-            padh (float): Padding height added to the image.
-
-        Returns:
-            (Dict): Updated labels dictionary with modified instance coordinates.
-
-        Examples:
-            >>> letterbox = LetterBox(new_shape=(640, 640))
-            >>> labels = {"instances": Instances(...)}
-            >>> ratio = (0.5, 0.5)
-            >>> padw, padh = 10, 20
-            >>> updated_labels = letterbox._update_labels(labels, ratio, padw, padh)
-        """
-        labels["instances"].convert_bbox(format="xyxy")
-        labels["instances"].denormalize(*labels["img"].shape[:2][::-1])
-        labels["instances"].scale(*ratio)
-        labels["instances"].add_padding(padw, padh)
-        return labels
