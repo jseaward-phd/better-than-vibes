@@ -1,3 +1,0 @@
-[submodule "PyTorchVAE"]
-	path = PyTorchVAE
-	url = ./PyTorchVAE

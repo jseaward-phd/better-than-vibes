@@ -3,8 +3,6 @@
 """
 Created on Mon Dec 30 18:45:40 2024
 
-@author: J. Seaward
-
 Script for constructing and training Bootstrap Your Own Latent (BYOL) learners.
 More explaining....
 """
@@ -25,13 +23,14 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange, tqdm
 
 
-
-
 # %% functions
 
 
 def _collect_dataloader(
-    path: Union[str, Path], im_sz: int = 256, batch_sz: int = 24, shuffle: bool = False
+    path: Union[str, Path],
+    im_sz: int = 256,
+    batch_sz: int = 24,
+    shuffle: bool = False,
 ) -> torch.utils.data.DataLoader:
     """
     Returns a torch dataloader of the data at PATH. Can be in yolo form with images/labels
@@ -56,6 +55,7 @@ def _collect_dataloader(
 
     """
     from data_img import BTV_Image_Dataset, torch_load_fn
+
     if os.path.exists(path) and len(os.listdir(path)) > 0:
         if "tech256" in path:
             transforms = torch_load_fn(dims=im_sz).transforms
@@ -76,6 +76,7 @@ def _collect_learner(
     device: Union[int, str, torch.device] = torch.device("cuda"),
     lr: float = 3e-4,
     im_sz: int = 256,
+    projection_size: int = 256,
 ) -> Tuple[BYOL, torch.optim.Adam]:
     """
     Construct a BYOL learner from a model. If none is provided, a torchvision resnet50
@@ -97,7 +98,8 @@ def _collect_learner(
         Learning rate to pass to the optimizer. The default is 3e-4.
     im_sz : int, optional
         Maximum dimension to which to scale the images in the dataset. The default is 256.
-
+    projection_size : int, optional
+        Dimensioin of the projection space. the defailt is 256, the BYOL default.
     Returns
     -------
     learner : BYOL learner
@@ -116,7 +118,9 @@ def _collect_learner(
         if isinstance(state_dict, (str, Path)):
             state_dict = torch.load(state_dict, weights_only=True)
         model.load_state_dict(state_dict)
-    learner = BYOL(model, image_size=im_sz, hidden_layer="avgpool")
+    learner = BYOL(
+        model, image_size=im_sz, hidden_layer="avgpool", projection_size=projection_size
+    )
     opt = torch.optim.Adam(learner.parameters(), lr=lr)
 
     return learner, opt
@@ -130,6 +134,7 @@ def train(
     epochs: int = 50,
     outpath: Optional[Union[Path, str]] = None,
     device: Union[str, int, torch.device] = torch.device("cuda"),
+    args: Optional[Union[OrderedDict, argparse.Namespace]] = None,
 ) -> None:
     """
     Train the provided BYOL learner, using the provided optimizer and dataloader.
@@ -172,6 +177,8 @@ def train(
     writer = SummaryWriter(
         log_dir=Path(outpath).parent.joinpath("tb_logs", Path(outpath).stem)
     )
+    if args is not None:
+        writer.add_hparams(vars(args))
     bestloss = 1e5
     try:
         for epoch in trange(epochs, unit=" Epoch"):
@@ -205,6 +212,7 @@ def train(
 
 def _old_test():
     from data_img import BTV_Image_Dataset
+
     ds = BTV_Image_Dataset("data/hardhat/test", max_dim=256, numpy=False)
     resnet = models.resnet50().cuda(0)
     resnet.load_state_dict(torch.load("./improved-net_cuda.pt", weights_only=True))
@@ -251,6 +259,7 @@ def main(args: Union[OrderedDict, argparse.Namespace]) -> BYOL:
         device=args.device,
         lr=args.lr,
         im_sz=args.image_size,
+        projection_size=args.projection_size,
     )
 
     train(
@@ -260,6 +269,7 @@ def main(args: Union[OrderedDict, argparse.Namespace]) -> BYOL:
         epochs=args.epochs,
         outpath=args.outpath,
         device=args.device,
+        args=args,
     )
 
     return learner
@@ -291,7 +301,13 @@ if __name__ == "__main__":
         "--state_dict",
         "-w",
         default=None,
-        help="Path to pretrained weights state dictionary",
+        help="Path to pretrained weights state dictionary.",
+    )
+    parser.add_argument(
+        "--projection_size",
+        type=int,
+        default=256,
+        help="Dimension of the BYOL projected embedding space.",
     )
     parser.add_argument(
         "--device",

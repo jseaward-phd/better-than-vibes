@@ -124,10 +124,19 @@ def prediction_entropy(y_true, y_predicted):
 
 
 def cal_info_about_test_set_in_train_set(
-    X_train, y_train, X_test, y_test, clf
+    X_train,
+    y_train,
+    X_test,
+    y_test,
+    clf,
+    discount_chance=True,
 ):  # This checks how much information a finetuning set X_train/y_train contains about test set X_test/y_test that clf does not have already. #TODO:make idx version
     clf2 = deepcopy(clf)
-    baseline_info = np.sum(prediction_info(y_test, clf2.predict_proba(X_test)))
+    baseline_info = np.sum(
+        prediction_info(
+            y_test, clf2.predict_proba(X_test), discount_chance=discount_chance
+        )
+    )
     clf2.fit(X_train, y_train)
     rel_info = baseline_info - np.sum(
         prediction_info(y_test, clf2.predict_proba(X_test))
@@ -162,12 +171,20 @@ def pick_nearest2test(X_train, y_train, X_test, y_test):
 
 
 def prune_training_set(
-    X, y, test_idx=None, k=10, return_smaller_sets=True, return_mask=True, thresh=0
+    X,
+    y,
+    test_idx=None,
+    k=10,
+    return_smaller_sets=True,
+    return_mask=True,
+    thresh=0,
+    metric="euclidean",
+    discount_chance=True,
 ):
     # maybe do this in rounds to avoid dropping all the examples in isolated clusters, or try radius clf. Will need to do rounds anyway for big sets...
     if test_idx is not None:
-        allidx = np.arange(X.shape[0])
-        trainidx = np.setdiff1d(allidx, test_idx)
+        allidx = np.arange(len(X))
+        train_idx = np.setdiff1d(allidx, test_idx)
         X_train, y_train, X_test, y_test = (
             X[train_idx],
             y[train_idx],
@@ -178,7 +195,7 @@ def prune_training_set(
         tiny_idx, tiny_y = collect_min_set(y_train, k)
         tiny_x = X_train[tiny_idx]
         clf_knn = fit_dknn_toXy(
-            tiny_x, tiny_y, k=k
+            tiny_x, tiny_y, k=k, metric=metric
         )  # fit an initial knn for whole train info estimation
 
         min_train_test_info_residual = np.sum(
@@ -201,10 +218,14 @@ def prune_training_set(
         X_train, y_train = X, y
 
     clf_knn_selfdrop = KNeighborsClassifier(
-        n_neighbors=25, metric="euclidean", weights=dist_weight_ignore_self
+        n_neighbors=25, metric=metric, weights=dist_weight_ignore_self
     )  # TODO: optimize n_neighbors
     clf_knn_selfdrop.fit(X_train, y_train)
-    info = prediction_info(y_train, clf_knn_selfdrop.predict_proba(X_train))
+    info = prediction_info(
+        y_train,
+        clf_knn_selfdrop.predict_proba(X_train),
+        discount_chance=discount_chance,
+    )
 
     ##not sure this is meaningful:
     train_self_info = info.sum(0)
@@ -333,7 +354,7 @@ def collect_min_set(y, min_sz=0):
 
     while len(idxs_out) < min_sz:
         idxs_out = np.union1d(
-            idxs_out, np.random.choice(np.arange(len(y)), len(idxs_out) - min_sz)
+            idxs_out, np.random.choice(np.arange(len(y)), min_sz - len(idxs_out))
         )
     return list(idxs_out), y[idxs_out]
 
@@ -342,6 +363,7 @@ def collect_min_set(y, min_sz=0):
 def add_stratified_folds_test(
     X, y, clf, n_splits=10, verbose=True
 ):  # should do some without stratification to show the difference.
+    y_fold = y.sum(1) if y.ndim > 1 else y
     kfold_idx_gen = StratifiedKFold(n_splits=n_splits).split(X, y)
     train_idx = np.array([], int)
     running_train, entropies, train_idx, scores, samples = [], [], [], [], []

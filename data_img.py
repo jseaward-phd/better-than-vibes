@@ -8,6 +8,7 @@ Created on Mon Sep 30 16:41:05 2024
 
 import os
 import pickle
+import gc
 import numpy as np
 import pandas as pd
 from math import floor, ceil
@@ -36,7 +37,8 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
         train_dir_path: Union[str, Path],
         max_dim: Optional[int] = None,
         imvec_type: Literal["whole", "byol"] = "whole",
-        embeddding_weights: Optional[Union[str, Path]] = None,
+        embedding_weights: Optional[Union[str, Path]] = None,
+        batch_size: int = 24,
         label_type: str = "yolo",
         numpy: bool = False,
         device: Union[int, str, torch.device] = torch.device("cuda"),
@@ -60,6 +62,9 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
         embedding_weights : Optional[Union[str, Path]]
             Path to resnet50 weights model weights for byol embedding. Required for imvec_type == 'byol'.
             The default is None.
+        batch_size: int, optional
+            Batch size for pushing sensors through the BYOL network. Not needed if not using BYOL embedding.
+            The default is 50.
         label_type : str, optional
             For using differen bounding box labels. The default, and currently only,
             value is "yolo".
@@ -76,10 +81,11 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
         """
         if imvec_type == "byol":
             assert (
-                embeddding_weights is not None
+                embedding_weights is not None
             ), "Must provide path to resnet50 weights for byol embedding."
         self.imvec_type = imvec_type
-        self.embeddding_weights = embeddding_weights
+        self.embedding_weights = embedding_weights
+        self.batch_size = batch_size
         self.trainpath = train_dir_path
         self.img_path = os.path.join(self.trainpath, "images/")  # could make suffix arg
         self.label_path = os.path.join(self.trainpath, "labels/")
@@ -111,19 +117,23 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
         if self.imvec_type == "whole":
             self.vector_dataset = WholeImageSet(self)
         elif self.imvec_type == "byol":
-            self.vector_dataset = BYOLVectorSet(self)  # TODO: check after writing class
+            self.vector_dataset = BYOLVectorSet(
+                self, batch_size=self.batch_size
+            )  # TODO: check after writing class
         # elif self.imvec_type == 'somethingelse':
         #     etc...
         # self.obj_vec_set = ObjectVectorSet(self)
 
         self.X = self.vector_dataset.X
         self.y = self.vector_dataset.y
+        if not self.numpy:
+            torch.cuda.empty_cache()
 
-    def __getitem__(self, idx: Union[int, Sequence[int]]) -> Tuple:
+    def __getitem__(self, idx: Union[int, slice, Sequence[int]]) -> Tuple:
         return self.vector_dataset[idx]
 
     def __len__(self) -> int:
-        return len(self.vector_dataset)
+        return len(self.imc)
 
     def _get_image_norm_params(self) -> Tuple[np.ndarray, np.ndarray]:
         _laod_func = (
@@ -141,6 +151,7 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
             enumerate(imc),
             desc="Scanning to find normalization parameters...",
             unit="Image file",
+            total=len(imc),
         ):
             px_mean += (
                 (im.mean(0).mean(0) - px_mean) / (n + 1)
@@ -276,6 +287,7 @@ class test_load_fn:
         im = self.transforms(im).numpy().transpose([1, 2, 0])
         return im
 
+
 class torch_load_fn:
     def __init__(
         self,
@@ -387,7 +399,6 @@ class VecGetter:
         ----------
         vec_set : Vector Set, as in this section.
             Soemthing with a __getitem__ that returns (vectros, labels).
-
         """
         self.vec_set = vec_set
 
@@ -425,15 +436,28 @@ class ImageVectorDataSet:
             self.y = self._get_y()
 
     def __getitem__(
-        self, idx: Union[int, np.ndarray, slice, Sequence[int]]
+        self, idx: Union[int, slice, Sequence[int]]
     ) -> Tuple[Union[np.ndarray, torch.Tensor], Union[np.ndarray, torch.Tensor]]:
         ims = self.getvec_fn(idx)
+        if ims is None:
+            gc.collect()
+            torch.cuda.empty_cache()
+            if isinstance(idx, int):
+                print("Ecountered OoM error with only one sample. Good luck, pal.")
+                return None, None
+            if hasattr(idx, "__irer__"):
+                length_idx = len(idx)
+            elif isinstance(idx, slice):
+                length_idx = len(range(*idx.indices(len(self.dataset))))
+            print(
+                f"{length_idx} is too many simultaneaus samples! Ecountered OoM error."
+            )
+            return None, None
         lbls = self.y[idx]
         if not self.dataset.numpy:
             ims.to(self.dataset.device)
             lbls.to(self.dataset.device)
         return ims, lbls
-
 
     def __len__(self) -> int:
         return len(self.dataset.imc)
@@ -464,27 +488,60 @@ class WholeImageSet(ImageVectorDataSet):
 
 
 class BYOLVectorSet(ImageVectorDataSet):
-    def __init__(self, dataset, getY: bool = True):
+    def __init__(self, dataset, getY: bool = True, batch_size: Optional[int] = None):
         # this needs to collect and attach the byol learner for embedding
+        if batch_size is None:
+            batch_size = len(dataset.imc)
+        assert batch_size > 0
+        self.batch_size = batch_size  # to bottleneck how many samples it tries to pass through the network
         self.dataset = dataset  # the superior Img Vec Dataset
         self.X = VecGetter(self)
         self.learner, _ = _collect_learner(
-            state_dict=self.dataset.embeddding_weights, im_sz=self.dataset.max_dim
+            state_dict=self.dataset.embedding_weights, im_sz=self.dataset.max_dim
         )
-        self.learner.to(self.dataset.device)
+        self.learner.to(self.dataset.device).eval()
         if getY:
             self.y = self._get_y()
 
+    @torch.no_grad()
     def getvec_fn(
-        self, idx: Union[int, np.ndarray, slice, Sequence[int]]
+        self, idx: Union[int, slice, Sequence[int]]
     ) -> Union[np.ndarray, torch.Tensor]:
-        # this will get the embedding vectors with projection, embedding = learner(imgs.cuda(0), return_embedding=True)
-        im = imc_framegetter(self.dataset.imc, idx)
-        im = torch.Tensor(im).to(self.dataset.device)
-        _, embedding = self.learner(im, return_embedding=True)
+        # this will get the embedding vectors, probaly need something to output numpy arrays for scikit-learn stuff
+        try:
+            if self.batch_size >= len(self.dataset.imc) or isinstance(idx, int):
+                im = imc_framegetter(self.dataset.imc, idx)
+                im = torch.Tensor(im).to(self.dataset.device)
+                if im.dim() < 4:
+                    im = im.unsqueeze(0)
+                if self.dataset.numpy:
+                    im = im.permute([0, 3, 1, 2])
+                embedding, _ = self.learner(im, return_embedding=True)
+            else:
+                # idx is either a specific sequence
+                sliced_index = (
+                    range(len(self.dataset.imc))[idx] if isinstance(idx, slice) else idx
+                )
+                batch_slice = slice(0, None, self.batch_size)
+                embedding_list = []
+                for i in range(len(sliced_index))[batch_slice]:
+                    batch_idx = list(sliced_index)[i : i + self.batch_size]
+                    im = imc_framegetter(self.dataset.imc, batch_idx)
+                    im = torch.Tensor(im).to(self.dataset.device)
+                    if im.dim() < 4:
+                        im = im.unsqueeze(0)
+                    if self.dataset.numpy:
+                        im = im.permute([0, 3, 1, 2])
+                    batch_embedding, _ = self.learner(im, return_embedding=True)
+                    embedding_list.append(batch_embedding.detach())
+                    torch.cuda.empty_cache()
+                embedding = torch.vstack(embedding_list)
+        except torch.OutOfMemoryError:
+            return None
+        embedding = embedding.detach()
+        if self.dataset.numpy:
+            embedding = np.array(embedding.cpu()).squeeze()
         return embedding
-
-
 
 
 class ObjectVectorSet(ImageVectorDataSet):
@@ -511,7 +568,7 @@ class ObjectVectorSet(ImageVectorDataSet):
 
 def imc_framegetter(
     imc: ski.io.ImageCollection,
-    idx: Union[int, np.ndarray, slice, Sequence[int]],
+    idx: Union[int, slice, Sequence[int]],
     pytorch: bool = False,
 ) -> Union[torch.Tensor, np.ndarray]:
     """
@@ -545,8 +602,8 @@ def imc_framegetter(
         pytorch = not imc.load_func.numpy  # make both flags numpy or both pytorch
     except AttributeError:
         pass
-    # to handle accidentally passed (data, label) pairs. May not be desired depending on pipeline.
-    if isinstance(idx, tuple):
+    # to handle cases where the upstream passes [iter,slice] like [[5,7,15],:] like what a numpy array wants
+    if any([isinstance(x, slice) for x in idx[1:]]):
         idx = idx[0]
 
     if isinstance(idx, int):
@@ -569,11 +626,8 @@ def imc_framegetter(
             im = imc[i]
             holder_ims.append(im)
         return torch.stack(holder_ims) if pytorch else np.stack(holder_ims)
-    elif isinstance(idx, (list, np.ndarray)):
-        holder_ims = []
-        for i in idx:
-            im = imc[i]
-            holder_ims.append(im)
+    elif hasattr(idx, "__iter__"):
+        holder_ims = [imc[i] for i in idx]
         return torch.stack(holder_ims) if pytorch else np.stack(holder_ims)
     else:
         raise TypeError("Passed index is of unknown type.")

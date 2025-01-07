@@ -7,3 +7,5 @@ runs/*
 *.pkl
 *.pt
 .spyproject/*
+PyTorchVAE/
+vae_module.py
