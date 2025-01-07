@@ -24,7 +24,7 @@ from torchvision.transforms import v2
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange, tqdm
 
-from data_img import BTV_Image_Dataset, torch_load_fn
+
 
 
 # %% functions
@@ -55,6 +55,7 @@ def _collect_dataloader(
         Dataloader for training.
 
     """
+    from data_img import BTV_Image_Dataset, torch_load_fn
     if os.path.exists(path) and len(os.listdir(path)) > 0:
         if "tech256" in path:
             transforms = torch_load_fn(dims=im_sz).transforms
@@ -173,9 +174,9 @@ def train(
     )
     bestloss = 1e5
     try:
-        for epoch in trange(epochs, unit="Epoch"):
+        for epoch in trange(epochs, unit=" Epoch"):
             losses = []
-            for images, _ in tqdm(dataloader, unit="Batch", leave=False):
+            for images, _ in tqdm(dataloader, unit=" Batch", leave=False):
                 images = images.to(device)
                 loss = learner(images)
                 opt.zero_grad()
@@ -202,7 +203,8 @@ def train(
         print(f"Model weights saved at {outpath}, with loss {bestloss:.4f}")
 
 
-def _old_test() -> Tuple[BTV_Image_Dataset, BYOL]:
+def _old_test():
+    from data_img import BTV_Image_Dataset
     ds = BTV_Image_Dataset("data/hardhat/test", max_dim=256, numpy=False)
     resnet = models.resnet50().cuda(0)
     resnet.load_state_dict(torch.load("./improved-net_cuda.pt", weights_only=True))

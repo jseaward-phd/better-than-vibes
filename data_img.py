@@ -176,7 +176,8 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
         for n, im in tqdm(
             enumerate(self.imc),
             desc="Scanning to find max image dimensions...",
-            unit="Image file",
+            unit=" Image file",
+            total=len(self.imc),
         ):
             H, W = im.shape[:2]
             mean = last_mean + (np.mean(H, W) - last_mean) / n
@@ -257,26 +258,6 @@ class BTV_Image_Dataset:  # rename since using BYOL approach, also make torch op
 
 
 # %% Load functions
-# class og_load_fn:
-#     def __init__(self, max_dim: Union[int, Sequence[int]]):
-#         if isinstance(self.dims, int):
-#             self.max_dim = max_dim
-#         else:
-#             self.max_dim = max(max_dim)
-
-#     def __call__(self, f: Union[str, Path]):
-#         im = ski.io.imread(f)
-#         if self.max_dim is not None:
-#             aspect = im.shape[1] / im.shape[0]
-#             if aspect > 1:  # short image
-#                 h = int(self.max_dim / aspect)
-#                 im = ski.transform.resize(im, [h, self.max_dim])
-#             else:  # wide image
-#                 w = int(self.max_dim * aspect)
-#                 im = ski.transform.resize(im, [self.max_dim, w])
-#         return im
-
-
 class test_load_fn:
     def __init__(self, dims: Optional[Union[int, Sequence[int]]] = None):
         if dims is None:
@@ -295,33 +276,12 @@ class test_load_fn:
         im = self.transforms(im).numpy().transpose([1, 2, 0])
         return im
 
-
-# class torch_load_fn_old:
-#     def __init__(self, dims):
-#         self.dims = dims
-#         self.transforms = v2.Compose(
-#             [
-#                 v2.ToImage(),
-#                 v2.Resize(self.dims),  # (None,max_size), yolo default is (640,640)
-#                 v2.ToDtype(torch.float32, scale=True),
-#                 v2.Normalize(
-#                     mean=[0.5479, 0.5197, 0.4716], std=[0.0498, 0.0468, 0.0421]
-#                 ),
-#             ]
-#         )
-
-#     def __call__(self, f):
-#         im = ski.io.imread(f)
-#         im = self.transforms(im).numpy().transpose([1, 2, 0])
-#         return im
-
-
 class torch_load_fn:
     def __init__(
         self,
         dims: Annotated[Sequence[int], 2] = (640, 640),
-        means: Sequence[float] = [0.5479, 0.5197, 0.4716],
-        stds: Sequence[float] = [0.0498, 0.0468, 0.0421],
+        means: Sequence[float] = np.array([0.5479, 0.5197, 0.4716]),
+        stds: Sequence[float] = np.array([0.0498, 0.0468, 0.0421]),
         numpy: bool = True,
     ):
         self.dims = dims
@@ -473,40 +433,7 @@ class ImageVectorDataSet:
             ims.to(self.dataset.device)
             lbls.to(self.dataset.device)
         return ims, lbls
-        # refactor this and the getvec fns to use imc_framegetter for the images, then convert to vectors
-        # if isinstance(idx, tuple):
-        #     idx = idx[0]
 
-        # if isinstance(idx, int):
-        #     return self.getvec_fn(idx)
-        # elif isinstance(idx, slice):
-        #     holder_vecs, holder_labs = [], []
-        #     if idx.start is None:
-        #         start = 0
-        #     elif idx.start == -1:
-        #         start = len(self)
-        #     else:
-        #         start = idx.start
-        #     if idx.stop is None or idx.stop == -1:
-        #         stop = len(self)
-        #     else:
-        #         stop = idx.stop
-        #     stop = idx.stop if idx.stop is not None else len(self)
-        #     step = idx.step if idx.step is not None else 1
-        #     for i in range(start, stop, step):
-        #         vec, labs = self.getvec_fn(i)
-        #         holder_vecs.append(vec)
-        #         holder_labs.append(labs)
-        #     return np.stack(holder_vecs), np.stack(holder_labs)
-        # elif isinstance(idx, (list, np.ndarray)):
-        #     holder_vecs, holder_labs = [], []
-        #     for i in idx:
-        #         vec, labs = self.getvec_fn(i)
-        #         holder_vecs.append(vec)
-        #         holder_labs.append(labs)
-        #     return np.stack(holder_vecs), np.stack(holder_labs)
-        # else:
-        #     raise Exception("Passed index is of unknown type.")
 
     def __len__(self) -> int:
         return len(self.dataset.imc)
@@ -558,36 +485,6 @@ class BYOLVectorSet(ImageVectorDataSet):
         return embedding
 
 
-# class ImageVectorSet_old(ImageVectorDataSet):  # new one will usr some embedder or other
-#     """
-#     Vector Dataset for whole images. Meant to be a sub-module for datasets in this file.
-#     """
-
-#     def getvec_fn(self, idx: int):
-#         """
-#         Gets the image vector for the image indexed by idx in the attached dataset.
-#         Makes a binary label for vector of length == number of classes in the dataset.
-#         A 1 in the lebel vector indicates an object is present. Uset to support
-#         the__getitem__ function of this class so that that function can accept slices.
-
-#         Parameters
-#         ----------
-#         idx : int
-#             Index of image in underlying set
-
-#         Returns
-#         -------
-#         array
-#             Single data vector and label as (array, array)
-
-#         """
-#         im = imc_framegetter(self.dataset.imc, idx)
-#         df = self.dataset.label_module.get_label_df(idx)
-#         im_vec = im2vec(im, self.dataset.img_vec_channel_length)
-#         labs_binary = [0] * len(self.dataset.classes)
-#         for label in set(df["class"]):
-#             labs_binary[label] = 1  # make binary vector for **presence** of object
-#         return np.array(im_vec), np.array(labs_binary)
 
 
 class ObjectVectorSet(ImageVectorDataSet):
@@ -610,49 +507,6 @@ class ObjectVectorSet(ImageVectorDataSet):
 
 
 # %% Utility Functions
-
-# from torchvision.datasets.vision import VisionDataset
-
-
-# class IMCWrapper(ski.io.ImageCollection):
-#     def __init__(self, imc):
-#         self.imc = imc
-
-#     def __len__(self):
-#         return len(self.imc)
-
-#     def __getitem__(self, idx):
-#         if isinstance(idx, tuple):
-#             idx = idx[0]
-
-#         if isinstance(idx, int):
-#             return self.imc[idx]
-#         elif isinstance(idx, slice):
-#             holder_ims = []
-#             if idx.start is None:
-#                 start = 0
-#             elif idx.start == -1:
-#                 start = len(self.imc)
-#             else:
-#                 start = idx.start
-#             if idx.stop is None or idx.stop == -1:
-#                 stop = len(self.imc)
-#             else:
-#                 stop = idx.stop
-#             stop = idx.stop if idx.stop is not None else len(self.imc)
-#             step = idx.step if idx.step is not None else 1
-#             for i in range(start, stop, step):
-#                 im = self.imc[i]
-#                 holder_ims.append(im)
-#             return np.stack(holder_ims)
-#         elif isinstance(idx, (list, np.ndarray)):
-#             holder_ims = []
-#             for i in idx:
-#                 im = self.imc[i]
-#                 holder_ims.append(im)
-#             return np.stack(holder_ims)
-#         else:
-#             raise Exception("Passed index is of unknown type.")
 
 
 def imc_framegetter(
