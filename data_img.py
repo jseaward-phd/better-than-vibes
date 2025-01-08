@@ -602,9 +602,8 @@ def imc_framegetter(
         pytorch = not imc.load_func.numpy  # make both flags numpy or both pytorch
     except AttributeError:
         pass
-    # to handle cases where the upstream passes [iter,slice] like [[5,7,15],:] like what a numpy array wants
-    if any([isinstance(x, slice) for x in idx[1:]]):
-        idx = idx[0]
+    
+    
 
     if isinstance(idx, int):
         return imc[idx]
@@ -627,104 +626,43 @@ def imc_framegetter(
             holder_ims.append(im)
         return torch.stack(holder_ims) if pytorch else np.stack(holder_ims)
     elif hasattr(idx, "__iter__"):
+        # to handle cases where the upstream passes [iter,slice] like [[5,7,15],:] like what a numpy array wants
+        if any([isinstance(x, slice) for x in idx[1:]]):
+            idx = idx[0]
         holder_ims = [imc[i] for i in idx]
         return torch.stack(holder_ims) if pytorch else np.stack(holder_ims)
     else:
         raise TypeError("Passed index is of unknown type.")
 
-
-# class VAEImageCollectionSet(VisionDataset):
-#     # Obselete
-#     def __init__(
-#         self,
-#         imc: ski.io.ImageCollection,
-#         split: str,
-#         transform: Optional[Callable] = None,
-#     ):
-#         self.split = split
-#         self.imc = imc
-#         self.transform = transform
-
-#     def __len__(self):
-#         return len(self.imc)
-
-#     def __getitem__(self, idx: int):
-#         im = self.imc[idx]
-#         if self.transform is not None:
-#             im = self.transform(im)
-#         return im, torch.zeros(40, dtype=int)
-
-
-# def im2vec(im, img_vec_channel_length):
-#     # Obselete, doesn't work with knn
-#     """
-#     Naïvely Converts an image array to a vector.
-
-#     Parameters
-#     ----------
-#     im : array
-#         Image to convert.
-#     img_vec_channel_length : int
-#         Number of pixels in each channel in the image; i.e. width * height
-
-#     Returns
-#     -------
-#     holder : list
-#         Vector of the image, padded at the end of each channel with 0.
-
-#     """
-#     if len(im.shape) > 2:
-#         holder = []
-#         for ch in range(im.shape[2]):
-#             data = list(np.ravel(im[:, :, ch]))
-#             holder += data + [0] * (img_vec_channel_length - len(data))
-#     else:
-#         data = list(np.ravel(im))
-#         holder = data + [0] * (img_vec_channel_length - len(data))
-#     return holder
-
-
-# def pad_resize_im(im, size=None):
-#     # obselete, superceded by LetterBox
-#     """
-#     Pad and resize image to a specified size (height by width)
-
-#     Parameters
-#     ----------
-#     im : array
-#         The image to resize.
-#     size : iterable, optional
-#         Dimensions (H, W) to output. The default is None, i.e. only pad.
-
-#     Returns
-#     -------
-#     padded_image : array
-#         Padded/resized image.
-
-#     """
-#     amount = int(abs(im.shape[0] - im.shape[1]) / 2)
-#     pad_tuple = (
-#         ((0, 0), (amount, amount), (0, 0))
-#         if im.shape[1] < im.shape[0]
-#         else ((amount, amount), (0, 0), (0, 0))
-#     )
-#     padded_image = np.pad(
-#         im,
-#         pad_tuple,
-#         mode="constant",
-#         constant_values=0,
-#     )
-#     if size is not None:
-#         padded_image = ski.transform.resize(padded_image, [size, size])
-#     return padded_image
-
-
-# def build_umap_reducer(ivds, embedding_dim=256, metric="cosine", block_frac=1):
-#     block_sz = len(ivds) * block_frac
-#     reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
-#     for ...:
-#     return reducer
-
+def yolo_list_writer(flist,outpath,train_idx,dev_idx=None,test_idx=None):
+    if isinstance(flist, BTV_Image_Dataset):
+        flist = flist.imc.files
+    elif isinstance(flist, ski.io.ImageCollection):
+        flist = flist.files
+        
+    outpath = Path(outpath)
+    if outpath.is_dir():
+        if not outpath.exists():
+            Path(outpath).mkdir(exist_ok=False, parents=True)
+        namelist = ['train.txt','dev.txt','test.txt']
+        for fname,idx_seq in zip(namelist,[train_idx,dev_idx,test_idx]):
+            if idx_seq is None: continue
+            with open(outpath.joinpath(fname), 'w') as f:
+                for idx in idx_seq:
+                    p = Path(flist[idx])
+                    assert '/images/' in str(p.absolute()), "Images must be in a YOLO structured folder with an 'images' and a  'label' folder."
+                    f.write(str(p.absolute()))
+                    f.write("\n") 
+    else:
+        assert sum([x is not None for x in [train_idx,dev_idx,test_idx]]) == 1, "Wrong number of indeces passed."
+        passed_idx = next(x for x in [train_idx,dev_idx,test_idx] if x is not None)
+        with open(outpath, 'w') as f:
+                for idx in passed_idx:
+                    p = Path(flist[idx])
+                    assert '/images/' in str(p.absolute()), "Images must be in a YOLO structured folder with an 'images' and a  'label' folder."
+                    f.write(str(p.absolute()))
+                    f.write("\n") 
+    # write yaml?
 
 # ripped off from ultralytics to make image argument in __call__ come first
 class LetterBox:
