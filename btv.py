@@ -20,6 +20,7 @@ from copy import deepcopy
 from tqdm import tqdm, trange
 from typing import Optional
 
+
 def mean_gen(data):
     n = 0
     mean = 0.0
@@ -118,7 +119,7 @@ def cal_info_about_test_set_in_train_set(
     y_test,
     clf,
     discount_chance=True,
-):  
+):
     clf2 = deepcopy(clf)
     baseline_info = np.sum(
         prediction_info(
@@ -164,7 +165,7 @@ def prune_training_set(
     test_idx=None,
     k=None,
     return_smaller_sets=True,
-    return_mask=True, #mask or indicies
+    return_mask=True,  # mask or indicies
     thresh=0,
     metric="euclidean",
     discount_chance=False,
@@ -175,7 +176,7 @@ def prune_training_set(
     else:
         if isinstance(test_idx[0], tuple) and len(test_idx[0]) == 2:
             X_test, y_test = test_idx[:]
-        else: 
+        else:
             allidx = np.arange(len(X))
             train_idx = np.setdiff1d(allidx, test_idx)
             X_train, y_train, X_test, y_test = (
@@ -184,8 +185,7 @@ def prune_training_set(
                 X[test_idx],
                 y[test_idx],
             )
-        
-        
+
     if X_test is not None:
         tiny_idx, tiny_y = collect_min_set(y_train, k)
         tiny_x = X_train[tiny_idx]
@@ -263,7 +263,6 @@ def prune_training_set(
         return X_train_selected, y_train_selected, selected_training_mask, info
     else:
         return selected_training_mask, info
-    
 
 
 def order_folds_by_entropy(
@@ -325,8 +324,9 @@ def order_samples_by_info(
 
 
 # %%  Models  ###
-def fit_dknn_toXy(X, y, k:Optional[int]=None, metric="euclidean", self_exlude=False):
-    if k is None: k = X.shape[1] * 2 # 2 neighbors per feature
+def fit_dknn_toXy(X, y, k: Optional[int] = None, metric="euclidean", self_exlude=False):
+    if k is None:
+        k = X.shape[1] * 2  # 2 neighbors per feature
     weights = dist_weight_ignore_self if self_exlude else "distance"
     clf = KNeighborsClassifier(n_neighbors=k, metric=metric, weights=weights)
     if isinstance(X, pd.DataFrame):
@@ -336,8 +336,11 @@ def fit_dknn_toXy(X, y, k:Optional[int]=None, metric="euclidean", self_exlude=Fa
     return clf
 
 
-def fit_dknn_toUMAP_reducer(reducer, y_train, k:Optional[int]=None, metric="euclidean"):
-    if k is None: k = reducer.embedding.shape[1]*2 # 2 neighbors per feature
+def fit_dknn_toUMAP_reducer(
+    reducer, y_train, k: Optional[int] = None, metric="euclidean"
+):
+    if k is None:
+        k = reducer.embedding.shape[1] * 2  # 2 neighbors per feature
     clf = KNeighborsClassifier(n_neighbors=k, metric=metric, weights="distance")
     clf.fit(reducer.embedding_, y_train)
     return clf
