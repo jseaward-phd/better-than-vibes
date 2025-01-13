@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from copy import deepcopy
 from tqdm import tqdm, trange
-
+from typing import Optional
 
 def mean_gen(data):
     n = 0
@@ -101,7 +101,7 @@ def prediction_info(y_true, y_predicted, discount_chance=True):
             )  # bits
             A.append(I)
     A = np.array(A)
-    A = np.where(A > 0, A, 0)
+    A = np.where(A >= 0, A, 0)
     return A
 
 
@@ -110,19 +110,7 @@ def prediction_entropy(y_true, y_predicted):
     return np.mean(A, axis=0)
 
 
-# def prediction_info_generator(y_true, y_predicted): # sinlge label?? def  a generator
-#     # replace log(0) with n instead of -Inf
-#     if isinstance(y_predicted, list):
-#         y_predicted = np.stack(y_predicted, axis=1)
-#     with np.errstate(divide="ignore"):
-#         for pred, true in zip(y_predicted, y_true):
-#             for p, t in zip(pred, true):
-#                 I = -np.log(p[t])/np.log(2) # bits
-#                 if np.isinf(I):
-#                     I = y_true.size
-#                 yield I
-
-
+# This checks how much information a finetuning set X_train/y_train contains about test set X_test/y_test that clf does not have already. #TODO:make idx version
 def cal_info_about_test_set_in_train_set(
     X_train,
     y_train,
@@ -130,7 +118,7 @@ def cal_info_about_test_set_in_train_set(
     y_test,
     clf,
     discount_chance=True,
-):  # This checks how much information a finetuning set X_train/y_train contains about test set X_test/y_test that clf does not have already. #TODO:make idx version
+):  
     clf2 = deepcopy(clf)
     baseline_info = np.sum(
         prediction_info(
@@ -174,24 +162,31 @@ def prune_training_set(
     X,
     y,
     test_idx=None,
-    k=10,
+    k=None,
     return_smaller_sets=True,
-    return_mask=True,
+    return_mask=True, #mask or indicies
     thresh=0,
     metric="euclidean",
-    discount_chance=True,
+    discount_chance=False,
 ):
     # maybe do this in rounds to avoid dropping all the examples in isolated clusters, or try radius clf. Will need to do rounds anyway for big sets...
-    if test_idx is not None:
-        allidx = np.arange(len(X))
-        train_idx = np.setdiff1d(allidx, test_idx)
-        X_train, y_train, X_test, y_test = (
-            X[train_idx],
-            y[train_idx],
-            X[test_idx],
-            y[test_idx],
-        )
-
+    if test_idx is None:
+        X_test, y_test = None, None
+    else:
+        if isinstance(test_idx[0], tuple) and len(test_idx[0]) == 2:
+            X_test, y_test = test_idx[:]
+        else: 
+            allidx = np.arange(len(X))
+            train_idx = np.setdiff1d(allidx, test_idx)
+            X_train, y_train, X_test, y_test = (
+                X[train_idx],
+                y[train_idx],
+                X[test_idx],
+                y[test_idx],
+            )
+        
+        
+    if X_test is not None:
         tiny_idx, tiny_y = collect_min_set(y_train, k)
         tiny_x = X_train[tiny_idx]
         clf_knn = fit_dknn_toXy(
@@ -218,7 +213,7 @@ def prune_training_set(
         X_train, y_train = X, y
 
     clf_knn_selfdrop = KNeighborsClassifier(
-        n_neighbors=25, metric=metric, weights=dist_weight_ignore_self
+        n_neighbors=X_train.shape[1] * 2, metric=metric, weights=dist_weight_ignore_self
     )  # TODO: optimize n_neighbors
     clf_knn_selfdrop.fit(X_train, y_train)
     info = prediction_info(
@@ -263,11 +258,12 @@ def prune_training_set(
     if return_smaller_sets:
         X_train_selected, y_train_selected = (
             X_train[np.arange(len(y_train))[selected_training_mask], :],
-            y_train[selected_training_mask, :],
+            y_train[selected_training_mask],
         )
-        return X_train_selected, y_train_selected, selected_training_mask
+        return X_train_selected, y_train_selected, selected_training_mask, info
     else:
-        return selected_training_mask
+        return selected_training_mask, info
+    
 
 
 def order_folds_by_entropy(
@@ -329,7 +325,8 @@ def order_samples_by_info(
 
 
 # %%  Models  ###
-def fit_dknn_toXy(X, y, k=10, metric="euclidean", self_exlude=False):
+def fit_dknn_toXy(X, y, k:Optional[int]=None, metric="euclidean", self_exlude=False):
+    if k is None: k = X.shape[1] * 2 # 2 neighbors per feature
     weights = dist_weight_ignore_self if self_exlude else "distance"
     clf = KNeighborsClassifier(n_neighbors=k, metric=metric, weights=weights)
     if isinstance(X, pd.DataFrame):
@@ -339,7 +336,8 @@ def fit_dknn_toXy(X, y, k=10, metric="euclidean", self_exlude=False):
     return clf
 
 
-def fit_dknn_toUMAP_reducer(reducer, y_train, k=10, metric="euclidean"):
+def fit_dknn_toUMAP_reducer(reducer, y_train, k:Optional[int]=None, metric="euclidean"):
+    if k is None: k = reducer.embedding.shape[1]*2 # 2 neighbors per feature
     clf = KNeighborsClassifier(n_neighbors=k, metric=metric, weights="distance")
     clf.fit(reducer.embedding_, y_train)
     return clf
@@ -411,7 +409,7 @@ def add_best_fold_first_test(
 
     try:
         check_is_fitted(clf)
-    except NotFittedError as exc:
+    except NotFittedError:
         print("Unfiitted estimator provided. Fitting on first fold.")
         idx0 = running_train.pop(0)
         clf.fit(X[idx0], y[idx0])
@@ -480,7 +478,7 @@ def train_best_fold_first_test(
 
     try:
         check_is_fitted(clf)
-    except NotFittedError as exc:
+    except NotFittedError:
         print("Unfiitted estimator provided. Fitting on first fold.")
         idx0 = running_train.pop(0)
         clf.fit(X[idx0], y[idx0])

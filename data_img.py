@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Mon Sep 30 16:41:05 2024
@@ -449,6 +448,9 @@ class ImageVectorDataSet:
                 length_idx = len(idx)
             elif isinstance(idx, slice):
                 length_idx = len(range(*idx.indices(len(self.dataset))))
+            else:
+                assert isinstance(idx, tople), "idx, {idx}, of type {type(idx)} is of unhandled type."
+                length_idx = len(idx[0])
             print(
                 f"{length_idx} is too many simultaneaus samples! Ecountered OoM error."
             )
@@ -662,8 +664,37 @@ def yolo_list_writer(flist,outpath,train_idx,dev_idx=None,test_idx=None):
                     assert '/images/' in str(p.absolute()), "Images must be in a YOLO structured folder with an 'images' and a  'label' folder."
                     f.write(str(p.absolute()))
                     f.write("\n") 
-    # write yaml?
 
+def ul_box2probs(box_obj,num_classes=3):
+    predicted_classes = box_obj.cls.cpu().numpy()
+    predicted_confs = box_obj.conf.cpu().numpy()
+
+    # keeps classes and probabilities aligned and highest probabilities last, which is the one left in the dictionary
+    class_keyd_dict = {cls: prob for cls, prob in sorted(zip(predicted_classes,predicted_confs))}
+    out = np.zeros(num_classes)
+    for cl, pr in class_keyd_dict.items():
+        # make sure the class numbers in the yaml correspond too the indeces you want here
+        out[int(cl)] = pr
+    return out
+
+class YOLO_clf():
+    def __init__(self, model,num_classes=3):
+        self.model = model
+        self.num_classes = num_classes
+        
+    def predict_proba(self,flist:Union[str, Path, Sequence[str]]):
+        if isinstance(flist, BTV_Image_Dataset):
+            flist = flist.imc.files
+        elif isinstance(flist, ski.io.ImageCollection):
+            flist = flist.files
+
+        results = self.model(flist)
+        boxes = [x.boxes for x in results]
+        ## TODO: should give back a lisr of <num_classes> arrays
+        out_probs = np.vstack([ul_box2probs(x,num_classes=self.num_classes) for x in boxes])
+        
+        return out_probs
+        
 # ripped off from ultralytics to make image argument in __call__ come first
 class LetterBox:
     """
