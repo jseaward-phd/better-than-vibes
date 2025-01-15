@@ -73,28 +73,28 @@ def get_exterior_pnts(X):
 
 
 # %%
-strategy = "pt"
+# strategy = "pt"
 
-info_mask = make_low_info_mask(X, y)
-like_xs = sort_by_label_and_info(X, y, info_mask)
-cluster_list, _ = cluster_likes(like_xs)
+# info_mask = make_low_info_mask(X, y)
+# like_xs = sort_by_label_and_info(X, y, info_mask)
+# cluster_list, _ = cluster_likes(like_xs)
 
-keep_pt_list = []
-if strategy == "hull":
-    for label, pt_list in enumerate(cluster_list):
-        for pts in pt_list:
-            try:
-                hull_pts, _ = get_exterior_pnts(pts)
-            except QhullError:
-                continue
-            keep_pt_list.append(hull_pts)
+# keep_pt_list = []
+# if strategy == "hull":
+#     for label, pt_list in enumerate(cluster_list):
+#         for pts in pt_list:
+#             try:
+#                 hull_pts, _ = get_exterior_pnts(pts)
+#             except QhullError:
+#                 continue
+#             keep_pt_list.append(hull_pts)
 
-else:
-    for label, pt_list in enumerate(cluster_list):
-        for pts in pt_list:
-            nn, _ = get_center_datapoit(pts)
-            keep_pt_list.append(nn)
-keep_pt_list.append(X[~info_mask])
-keep_pts = np.vstack(keep_pt_list)
-idx = [int(np.where(np.all(X == x, axis=1))[0]) for x in keep_pts]  # this step is dumb
-y_keep = y[idx]
+# else:
+#     for label, pt_list in enumerate(cluster_list):
+#         for pts in pt_list:
+#             nn, _ = get_center_datapoit(pts)
+#             keep_pt_list.append(nn)
+# keep_pt_list.append(X[~info_mask])
+# keep_pts = np.vstack(keep_pt_list)
+# idx = [int(np.where(np.all(X == x, axis=1))[0]) for x in keep_pts]  # this step is dumb
+# y_keep = y[idx]

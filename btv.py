@@ -74,7 +74,7 @@ def prediction_info_multilabel(
     return A
 
 
-def prediction_info(y_true, y_predicted, discount_chance=True):
+def prediction_info(y_true, y_predicted, discount_chance=False):
     # for classification with a single, binary label, otherwize need to selecet with the true label differently and replace 2 with 2^{# of labels} or do a sum over labels
     A = []
     if isinstance(y_predicted, list):
@@ -106,29 +106,56 @@ def prediction_info(y_true, y_predicted, discount_chance=True):
     return A
 
 
-def prediction_entropy(y_true, y_predicted):
-    A = prediction_info(y_true, y_predicted)
-    return np.mean(A, axis=0)
+def prediction_entropy(y_true, y_predicted, drop_zeros=False, discount_chance=True):
+    A = prediction_info(y_true, y_predicted, discount_chance=discount_chance)
+    H = np.mean(A[A.nonzero()], axis=0) if drop_zeros else np.mean(A, axis=0)
+    return H
 
 
 # This checks how much information a finetuning set X_train/y_train contains about test set X_test/y_test that clf does not have already. #TODO:make idx version
-def cal_info_about_test_set_in_train_set(
+def est_info_about_test_set_in_train_set(
     X_train,
     y_train,
     X_test,
     y_test,
-    clf,
     discount_chance=True,
 ):
-    clf2 = deepcopy(clf)
+
+    clf2 = fit_dknn_toXy(X_train, y_train)
+    residual_info = prediction_info(
+        y_test, clf2.predict_proba(X_test), discount_chance=discount_chance
+    ).sum()
+    p_chance = 1 / len(np.unique(y_test))
+    test_info = -np.sum(np.log(p_chance) / np.log(2)) * len(y_test)
+    return (
+        test_info - residual_info
+    )  # info needed - info left after training = info in train set
+
+
+def cal_info_about_test_set_in_finetune_set(
+    X_train,
+    y_train,
+    X_ft,
+    y_ft,
+    X_test,
+    y_test,
+    clf=None,
+    discount_chance=True,
+):
+    if clf is None:
+        clf2 = fit_dknn_toXy(X_train, y_train)
+    else:
+        clf2 = deepcopy(clf)
     baseline_info = np.sum(
         prediction_info(
             y_test, clf2.predict_proba(X_test), discount_chance=discount_chance
         )
     )
-    clf2.fit(X_train, y_train)
+    clf2.fit(np.vstack([X_train, X_ft]), np.append(y_train, y_ft))
     rel_info = baseline_info - np.sum(
-        prediction_info(y_test, clf2.predict_proba(X_test))
+        prediction_info(
+            y_test, clf2.predict_proba(X_test), discount_chance=discount_chance
+        )
     )
     return rel_info
 
