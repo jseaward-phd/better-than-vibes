@@ -111,6 +111,43 @@ def prediction_entropy(y_true, y_predicted, drop_zeros=False, discount_chance=Tr
     H = np.mean(A[A.nonzero()], axis=0) if drop_zeros else np.mean(A, axis=0)
     return H
 
+def chance_info(y,class_num:Optional[int]=None,use_freq:bool=True): 
+    if use_freq:
+        # assumes y is a label set, not a prediction set
+        classes, counts = np.unique(y, return_counts=True)
+        classes = list(classes)
+        p = np.array([1/counts[classes.index(lbl)] for lbl in y])
+        info = -np.log2(p).sum()
+    else:
+        if class_num is None: class_num = len(np.unique(y))
+        p = 1/class_num
+        info = -np.log2(p) * len(y)
+    return info
+    
+def chance_info_multilabel(y,class_num:Optional[int]=None, use_freq:bool=True):
+    # expects y to be N x class_num with each row having the form [p(c1), p(c2), ...]
+    if use_freq:
+        # assumes y is a label set, not a prediction set
+        freq = np.sum(y, axis=0)/len(y)
+        info = -np.log2(freq) * len(y)
+    else:
+        if class_num is None: class_num = np.array(y).shape[1]
+        p = 1/class_num
+        info = -np.log2(p) * len(y)
+        info = np.array([info] * class_num)
+    return info
+
+def extraction_rateVSchance(X,y,clf=None,use_freq=True):
+    if clf is None:
+        clf = fit_dknn_toXy(X, y)
+    else:
+        clf2 = deepcopy(clf)
+        
+    info_baseline = chance_info(y,use_freq=use_freq) if np.ndim(y)>1 else chance_info_multilabel(y,use_freq=use_freq)
+    info = prediction_info(y, clf2.predict_proba(X),discount_chance=False)
+    info_rate = (info_baseline - info)/info_baseline
+    assert info_rate>0, "The model is WORSE than guessing?"
+    return info_rate
 
 # This checks how much information a finetuning set X_train/y_train contains about test set X_test/y_test that clf does not have already. #TODO:make idx version
 def est_info_about_test_set_in_train_set(
@@ -118,10 +155,11 @@ def est_info_about_test_set_in_train_set(
     y_train,
     X_test,
     y_test,
+    clf=None,
     discount_chance=True,
 ):
 
-    clf2 = fit_dknn_toXy(X_train, y_train)
+    clf2 = fit_dknn_toXy(X_train, y_train) if clf is None else deepcopy(clf)
     residual_info = prediction_info(
         y_test, clf2.predict_proba(X_test), discount_chance=discount_chance
     ).sum()
@@ -223,7 +261,7 @@ def prune_training_set(
         min_train_test_info_residual = np.sum(
             prediction_info(y_test, clf_knn.predict_proba(X_test))
         )
-        full_train_test_info = cal_info_about_test_set_in_train_set(
+        full_train_test_info = est_info_about_test_set_in_train_set(
             X_train, y_train, X_test, y_test, clf_knn
         )
         clf_knn.fit(X_train, y_train)
@@ -239,10 +277,7 @@ def prune_training_set(
     else:
         X_train, y_train = X, y
 
-    clf_knn_selfdrop = KNeighborsClassifier(
-        n_neighbors=X_train.shape[1] * 2, metric=metric, weights=dist_weight_ignore_self
-    )  # TODO: optimize n_neighbors
-    clf_knn_selfdrop.fit(X_train, y_train)
+    clf_knn_selfdrop = fit_dknn_toXy(X_train, y_train, metric=metric, self_exlude=True)
     info = prediction_info(
         y_train,
         clf_knn_selfdrop.predict_proba(X_train),
@@ -264,7 +299,7 @@ def prune_training_set(
         clf_knn.fit(
             tiny_x, tiny_y
         )  # need a real function for this. One that is of minimum size but includes all classes.
-        self_pruned_train_test_info = cal_info_about_test_set_in_train_set(
+        self_pruned_train_test_info = est_info_about_test_set_in_train_set(
             X_train[info > thresh], y_train[info > thresh], X_test, y_test, clf_knn
         )
         print("Self-pruned train set size: ", y_train[info > thresh].size)
