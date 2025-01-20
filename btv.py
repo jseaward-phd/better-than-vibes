@@ -111,43 +111,58 @@ def prediction_entropy(y_true, y_predicted, drop_zeros=False, discount_chance=Tr
     H = np.mean(A[A.nonzero()], axis=0) if drop_zeros else np.mean(A, axis=0)
     return H
 
-def chance_info(y,class_num:Optional[int]=None,use_freq:bool=True): 
+
+def chance_info(y, class_num: Optional[int] = None, use_freq: bool = True):
     if use_freq:
         # assumes y is a label set, not a prediction set
         classes, counts = np.unique(y, return_counts=True)
         classes = list(classes)
-        p = np.array([1/counts[classes.index(lbl)] for lbl in y])
+        p = np.array([counts[classes.index(lbl)] / len(y) for lbl in y])
         info = -np.log2(p).sum()
     else:
-        if class_num is None: class_num = len(np.unique(y))
-        p = 1/class_num
+        if class_num is None:
+            class_num = len(np.unique(y))
+        p = 1 / class_num
         info = -np.log2(p) * len(y)
     return info
-    
-def chance_info_multilabel(y,class_num:Optional[int]=None, use_freq:bool=True):
+
+
+def chance_info_multilabel(y, class_num: Optional[int] = None, use_freq: bool = True):
     # expects y to be N x class_num with each row having the form [p(c1), p(c2), ...]
     if use_freq:
         # assumes y is a label set, not a prediction set
-        freq = np.sum(y, axis=0)/len(y)
+        freq = np.sum(y, axis=0) / len(y)
         info = -np.log2(freq) * len(y)
     else:
-        if class_num is None: class_num = np.array(y).shape[1]
-        p = 1/class_num
+        if class_num is None:
+            class_num = np.array(y).shape[1]
+        p = 1 / class_num
         info = -np.log2(p) * len(y)
         info = np.array([info] * class_num)
     return info
 
-def extraction_rateVSchance(X,y,clf=None,use_freq=True):
-    if clf is None:
-        clf = fit_dknn_toXy(X, y)
-    else:
-        clf2 = deepcopy(clf)
-        
-    info_baseline = chance_info(y,use_freq=use_freq) if np.ndim(y)>1 else chance_info_multilabel(y,use_freq=use_freq)
-    info = prediction_info(y, clf2.predict_proba(X),discount_chance=False)
-    info_rate = (info_baseline - info)/info_baseline
-    assert info_rate>0, "The model is WORSE than guessing?"
+
+def estimate_rateVSchance(X, y, use_freq=True, metric="euclidean"):
+    _clf = fit_dknn_toXy(X, y, metric=metric, self_exlude=True)
+    return _extraction_rateVSchance(X, y, _clf, use_freq)
+
+
+def model_extraction_rateVSchance(X, y, use_freq=True):
+    _clf = deepcopy(clf)
+    return _extraction_rateVSchance(X, y, _clf, use_freq)
+
+
+def _extraction_rateVSchance(X, y, _clf, use_freq=True):
+    info_baseline = (
+        chance_info_multilabel(y, use_freq=use_freq)
+        if np.ndim(y) > 1
+        else chance_info(y, use_freq=use_freq)
+    )
+    info = prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
+    info_rate = (info_baseline - info) / info_baseline
+    assert info_rate >= 0, "The model is WORSE than guessing?"
     return info_rate
+
 
 # This checks how much information a finetuning set X_train/y_train contains about test set X_test/y_test that clf does not have already. #TODO:make idx version
 def est_info_about_test_set_in_train_set(
@@ -159,9 +174,9 @@ def est_info_about_test_set_in_train_set(
     discount_chance=True,
 ):
 
-    clf2 = fit_dknn_toXy(X_train, y_train) if clf is None else deepcopy(clf)
+    _clf = fit_dknn_toXy(X_train, y_train) if clf is None else deepcopy(clf)
     residual_info = prediction_info(
-        y_test, clf2.predict_proba(X_test), discount_chance=discount_chance
+        y_test, _clf.predict_proba(X_test), discount_chance=discount_chance
     ).sum()
     p_chance = 1 / len(np.unique(y_test))
     test_info = -np.sum(np.log(p_chance) / np.log(2)) * len(y_test)
@@ -181,18 +196,18 @@ def cal_info_about_test_set_in_finetune_set(
     discount_chance=True,
 ):
     if clf is None:
-        clf2 = fit_dknn_toXy(X_train, y_train)
+        _clf = fit_dknn_toXy(X_train, y_train)
     else:
-        clf2 = deepcopy(clf)
+        _clf = deepcopy(clf)
     baseline_info = np.sum(
         prediction_info(
-            y_test, clf2.predict_proba(X_test), discount_chance=discount_chance
+            y_test, _clf.predict_proba(X_test), discount_chance=discount_chance
         )
     )
-    clf2.fit(np.vstack([X_train, X_ft]), np.append(y_train, y_ft))
+    _clf.fit(np.vstack([X_train, X_ft]), np.append(y_train, y_ft))
     rel_info = baseline_info - np.sum(
         prediction_info(
-            y_test, clf2.predict_proba(X_test), discount_chance=discount_chance
+            y_test, _clf.predict_proba(X_test), discount_chance=discount_chance
         )
     )
     return rel_info
@@ -317,14 +332,25 @@ def prune_training_set(
     selected_training_mask = (
         info > thresh if return_mask else np.arange(len(y_train))[info > thresh]
     )
+    print(
+        "Length of pruned training set: ",
+        np.sum(selected_training_mask),
+        f" %size of original: {100*np.sum(selected_training_mask)/len(y_train):.2f}.",
+    )
     if return_smaller_sets:
         X_train_selected, y_train_selected = (
             X_train[np.arange(len(y_train))[selected_training_mask], :],
             y_train[selected_training_mask],
         )
-        return X_train_selected, y_train_selected, selected_training_mask, info
+        return (
+            X_train_selected,
+            y_train_selected,
+            selected_training_mask,
+            train_self_info,
+            info,
+        )
     else:
-        return selected_training_mask, info
+        return selected_training_mask, train_self_info, info
 
 
 def order_folds_by_entropy(
