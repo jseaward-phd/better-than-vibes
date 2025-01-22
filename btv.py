@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from copy import deepcopy
 from tqdm import tqdm, trange
-from typing import Optional
+from typing import Optional, Protocol
 
 
 def mean_gen(data):
@@ -112,7 +112,7 @@ def prediction_entropy(y_true, y_predicted, drop_zeros=False, discount_chance=Tr
     return H
 
 
-def chance_info(y, class_num: Optional[int] = None, use_freq: bool = True):
+def _chance_info(y, class_num: Optional[int] = None, use_freq: bool = True):
     if use_freq:
         # assumes y is a label set, not a prediction set
         classes, counts = np.unique(y, return_counts=True)
@@ -127,7 +127,7 @@ def chance_info(y, class_num: Optional[int] = None, use_freq: bool = True):
     return info
 
 
-def chance_info_multilabel(y, class_num: Optional[int] = None, use_freq: bool = True):
+def _chance_info_multilabel(y, class_num: Optional[int] = None, use_freq: bool = True):
     # expects y to be N x class_num with each row having the form [p(c1), p(c2), ...]
     if use_freq:
         # assumes y is a label set, not a prediction set
@@ -142,22 +142,18 @@ def chance_info_multilabel(y, class_num: Optional[int] = None, use_freq: bool = 
     return info
 
 
-def estimate_rateVSchance(X, y, use_freq=True, metric="euclidean"):
-    _clf = fit_dknn_toXy(X, y, metric=metric, self_exlude=True)
-    return _extraction_rateVSchance(X, y, _clf, use_freq)
+def chance_info(y, class_num: Optional[int] = None, use_freq: bool = True):
+    args = [y, class_num, use_freq]
+    return _chance_info_multilabel(*args) if np.ndim(y) > 1 else _chance_info(*args)
 
 
-def model_extraction_rateVSchance(X, y, use_freq=True):
-    _clf = deepcopy(clf)
+def estimate_rateVSchance(X, y, clf=None, use_freq=True, metric="euclidean"):
+    _clf = fit_dknn_toXy(X, y, metric=metric, self_exlude=True) if clf is None else clf
     return _extraction_rateVSchance(X, y, _clf, use_freq)
 
 
 def _extraction_rateVSchance(X, y, _clf, use_freq=True):
-    info_baseline = (
-        chance_info_multilabel(y, use_freq=use_freq)
-        if np.ndim(y) > 1
-        else chance_info(y, use_freq=use_freq)
-    )
+    info_baseline = chance_info(y, use_freq=use_freq)
     info = prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
     info_rate = (info_baseline - info) / info_baseline
     assert info_rate >= 0, "The model is WORSE than guessing?"

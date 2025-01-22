@@ -72,29 +72,50 @@ def get_exterior_pnts(X):
     return X[chull.vertices], chull.vertices
 
 
-# %%
-# strategy = "pt"
+# %% setup test
 
-# info_mask = make_low_info_mask(X, y)
-# like_xs = sort_by_label_and_info(X, y, info_mask)
-# cluster_list, _ = cluster_likes(like_xs)
+import data_tab
+from scipy.spatial import QhullError
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.model_selection import train_test_split
 
-# keep_pt_list = []
-# if strategy == "hull":
-#     for label, pt_list in enumerate(cluster_list):
-#         for pts in pt_list:
-#             try:
-#                 hull_pts, _ = get_exterior_pnts(pts)
-#             except QhullError:
-#                 continue
-#             keep_pt_list.append(hull_pts)
+ds = data_tab.getdata(44156, verbose=False)
+df, X, y = data_tab.dataset2df(ds, class_cols=["class"])
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-# else:
-#     for label, pt_list in enumerate(cluster_list):
-#         for pts in pt_list:
-#             nn, _ = get_center_datapoit(pts)
-#             keep_pt_list.append(nn)
-# keep_pt_list.append(X[~info_mask])
-# keep_pts = np.vstack(keep_pt_list)
-# idx = [int(np.where(np.all(X == x, axis=1))[0]) for x in keep_pts]  # this step is dumb
-# y_keep = y[idx]
+clf = GradientBoostingClassifier(
+    n_estimators=100, learning_rate=1.0, max_depth=1, random_state=10
+)
+clf.fit(X_train, y_train)
+print(clf.score(X_test, y_test))
+
+
+# %% Select down further
+
+strategy = "hull"
+
+info_mask = make_low_info_mask(X_train, y_train)
+like_xs = sort_by_label_and_info(X_train, y_train, info_mask)
+cluster_list, _ = cluster_likes(like_xs)
+
+keep_pt_list = []
+if strategy == "hull":
+    for label, pt_list in enumerate(cluster_list):
+        for pts in pt_list:
+            try:
+                hull_pts, _ = get_exterior_pnts(pts)
+            except QhullError:
+                continue
+            keep_pt_list.append(hull_pts)
+
+else:
+    for label, pt_list in enumerate(cluster_list):
+        for pts in pt_list:
+            nn, _ = get_center_datapoit(pts)
+            keep_pt_list.append(nn)
+keep_pt_list.append(X_train[~info_mask])
+keep_pts = np.vstack(keep_pt_list)
+idx = [
+    int(np.where(np.all(X_train == x, axis=1))[0]) for x in keep_pts
+]  # this step is dumb
+y_keep = y[idx]
