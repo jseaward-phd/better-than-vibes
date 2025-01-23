@@ -89,6 +89,15 @@ clf = GradientBoostingClassifier(
 clf.fit(X_train, y_train)
 print(clf.score(X_test, y_test))
 
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+X_train, X_dev1, y_train, y_dev1 = train_test_split(X_train, y_train, test_size=0.2)
+X_train, X_dev2, y_train, y_dev2 = train_test_split(X_train, y_train, test_size=0.2)
+X_train, X_dev3, y_train, y_dev3 = train_test_split(X_train, y_train, test_size=0.2)
+X_train, X_dev4, y_train, y_dev4 = train_test_split(X_train, y_train, test_size=0.2)
+X_train, X_dev5, y_train, y_dev5 = train_test_split(X_train, y_train, test_size=0.2)
+
+X_ft_list = [X_dev1, X_dev2, X_dev3, X_dev4, X_dev5]
+y_ft_list = [y_dev1, y_dev2, y_dev3, y_dev4, y_dev5]
 
 # %% Select down further
 

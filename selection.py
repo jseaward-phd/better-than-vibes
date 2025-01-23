@@ -12,6 +12,7 @@ from sklearn.neighbors import NearestNeighbors
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import cdist, pdist
 from prettytable import PrettyTable
+from tqdm import tqdm
 
 
 from typing import Optional, Sequence, Union, Tuple
@@ -108,8 +109,8 @@ def select_pts_nearest2test(X_train, X_test, metric="euclidean") -> np.ndarray[i
 
 
 def select_clusters_nearest2test(
-    X_train,
-    X_test,
+    X_train: np.ndarray,
+    X_test: np.ndarray,
     metric: str = "euclidean",
     min_cluster_size: Optional[int] = None,
     drop_outliers: bool = True,
@@ -167,64 +168,128 @@ def select_via_test_overlap(
 
 
 def _cut_by_info_rate(
-    X_ft_list,
-    y_ft_list,
-    info_thresh,
+    X_ft_list: Sequence[np.ndarray],
+    y_ft_list: Sequence[Sequence[int]],
+    info_thresh: float,
     verbose=False,
-    to_keep: Optional[list[int]] = None,
-) -> Tuple[list[int], np.ndarray]:
-    info_rates = [estimate_rateVSchance(X, y) for X, y in zip(X_ft_list, y_ft_list)]
+    to_keep: Optional[Sequence[bool]] = None,
+) -> Tuple[Sequence[bool], np.ndarray[float]]:
     if to_keep is None:
-        to_keep = list(range(len(X_ft_list)))
-    for i, X in enumerate(X_ft_list):
-        if i not in to_keep:
-            continue
-        if info_rates[i] < info_thresh:
-            to_keep.remove(i)
-            if verbose:
-                print(
-                    f"Dropping fine tuning set at index {i}. It has estimated info rate of {info_rates[i] :0.4f}"
-                )
+        to_keep = [True] * len(X_ft_list)
+    info_rates = np.zeros(len(X_ft_list))
+    for i, (X, y) in tqdm(
+        enumerate(zip(X_ft_list, y_ft_list)),
+        desc="Estimating self-information rate...",
+        total=len(X_ft_list),
+    ):
+        if to_keep[i]:
+            info_rate = estimate_rateVSchance(X, y)
+            if info_rate < info_thresh:
+                to_keep[i] = False
+                if verbose:
+                    print(
+                        f"INFO: Dropping fine tuning set at index {i}. It has estimated info rate of {info_rate:0.4f}"
+                    )
+            else:
+                info_rates[i] = info_rate
     return to_keep, np.array(info_rates)
 
 
-def _cut_by_overlap(
-    X_ft_list,
-    X_test,
-    overlap_thresh,
+def _cut_by_test_overlap(
+    X_ft_list: Sequence[np.ndarray],
+    X_test: np.ndarray,
+    overlap_thresh: Union[float, int],
     verbose=False,
-    to_keep: Optional[list[int]] = None,
-) -> Tuple[list[int], np.ndarray]:
+    to_keep: Optional[Sequence[bool]] = None,
+) -> Tuple[Sequence[bool], np.ndarray[float]]:
     if to_keep is None:
-        to_keep = list(range(len(X_ft_list)))
-    overlaps = []
-    for i, X in enumerate(X_ft_list):
-        if i not in to_keep:
-            continue
-        overlap_percent = estimate_overlap(X_test, X, normalize_by_X1=True)
-        overlaps.append(overlap_percent)
-        if overlap_percent < overlap_thresh:
-            to_keep.remove(i)
-            if verbose:
-                print(
-                    f"Dropping fine tuning set at index {i}. Estimate that it overlaps with {overlap_percent :0.3f}% of the test set."
-                )
+        to_keep = [True] * len(X_ft_list)
+    overlaps = np.zeros(len(X_ft_list))
+    for i, X in tqdm(
+        enumerate(X_ft_list),
+        desc="Checking overlap with test set...",
+        total=len(X_ft_list),
+    ):
+        if to_keep[i]:
+            overlap_percent = estimate_overlap(X_test, X, normalize_by_X1=True)
+            if overlap_percent < overlap_thresh:
+                to_keep[i] = False
+                if verbose:
+                    print(
+                        f"INFO: Dropping fine tuning set at index {i}. Estimate that it overlaps with {overlap_percent :0.3f}% of the test set."
+                    )
+            else:
+                overlaps[i] = overlap_percent
     return to_keep, np.array(overlaps)
 
 
 def _overflow_from_train(
-    X_train: Sequence[np.ndarray],
+    X_train: np.ndarray,
     X_ft_list: Sequence[np.ndarray],
-    to_keep: Optional[list[int]] = None,
-) -> np.ndarray:
+    to_keep: Optional[Sequence[bool]] = None,
+) -> np.ndarray[float]:
     if to_keep is None:
-        to_keep = list(range(len(X_ft_list)))
-    train_overflows = np.ones(len(X_ft_list))
-    for i, X in enumerate(X_ft_list):
-        if i not in to_keep:
-            continue
-        train_overflows[i] = estimate_overflow(X, X_train, normalize_by_X1=True)
+        to_keep = [True] * len(X_ft_list)
+    train_overflows = np.zeros(len(X_ft_list))
+    for i, X in tqdm(
+        enumerate(X_ft_list), desc="Estimating portion outside the training set..."
+    ):
+        if to_keep[i]:
+            train_overflows[i] = estimate_overflow(X, X_train, normalize_by_X1=True)
     return train_overflows
+
+
+# %%
+def rank_by_scores(
+    *score_lists: Sequence[Sequence[Union[float, int]]],
+    to_keep: Optional[Sequence[bool]] = None,
+    big_first: Optional[Sequence[bool]] = None,
+    sort_order: Optional[Sequence[int]] = None,
+    verbose: bool = True,
+) -> np.ndarray[int]:
+    if verbose:
+        var_names = []
+        for i, v in enumerate(score_lists):
+            try:
+                var_names.append(
+                    [name for name, value in globals().items() if value is v][0]
+                )
+            # make passed scores global tfor titled tables
+            except IndexError:
+                var_names.append(f"Attribute score {i+1}")
+    assert all(
+        len(x) == len(score_lists[0]) for x in score_lists
+    ), "Should have a score for each finetuning set."
+    if to_keep is None:
+        to_keep = [True] * len(score_lists[0])
+    if big_first is None:
+        big_first = np.array([-1] * len(score_lists[0]))
+    else:
+        big_first = np.where(big_first, -1, 1)
+    assert all(len(big_first) == len(x) for x in score_lists)
+    # np.argsort sorts smallest to bigest. To sort biggest to smallest, multiply the scores by  -1
+    score_lists = [b * x for b, x in zip(big_first, score_lists)]
+    # most imortant attribute should be sorted on last. This assumes attributes in scores_list are in order of importance
+    if sort_order is None:
+        sort_order = np.arange(len(score_lists))[::-1]
+    rank = np.arange(len(score_lists[0]))
+    for attribute_idx in sort_order:
+        # np argsort leaves ties in previous order so the last rankng is the mmost important with previous rankings showing through in ties
+        rank = rank[np.argsort(score_lists[attribute_idx][rank], kind="stable")]
+        if verbose:
+            tab = PrettyTable()
+            tab.title = f"{var_names[attribute_idx]}"
+            tab.add_column("Input index", np.arange(len(score_lists[0])))
+            tab.add_column("Rank", rank)
+            tab.add_column(
+                "Value", score_lists[attribute_idx] * big_first[attribute_idx]
+            )
+            print(tab)
+    if verbose:
+        print("Values of 0.0 indicate a dataset excluded during the threshold checks.")
+        print("Dropped sets are assigned a 'rank' of -1.")
+    rank = np.where(to_keep, rank, -1)
+    return rank.astype(int)
 
 
 def select_ft_sets(
@@ -235,9 +300,10 @@ def select_ft_sets(
     y_test: Sequence[np.ndarray[int]],
     verbose=True,
     return_sorted=True,
-    info_rate_tol: float = 0,
+    info_rate_tol: float = 0.03,
     overlap_thresh=0.05,
 ):
+    global test_overlaps, info_rates, train_overflows
     test_info_rate = estimate_rateVSchance(X_test, y_test)
     info_thresh = test_info_rate - test_info_rate * info_rate_tol
     if verbose:
@@ -248,7 +314,13 @@ def select_ft_sets(
     to_keep, info_rates = _cut_by_info_rate(
         X_ft_list, y_ft_list, info_thresh, verbose=verbose
     )
-    to_keep, test_overlaps = _cut_by_overlap(
+    to_keep, test_overlaps = _cut_by_test_overlap(
         X_ft_list, X_test, overlap_thresh, verbose=verbose, to_keep=to_keep
     )
     train_overflows = _overflow_from_train(X_train, X_ft_list, to_keep=to_keep)
+    ranking = rank_by_scores(
+        test_overlaps, info_rates, train_overflows, to_keep=to_keep
+    )
+    if return_sorted:
+        return X_ft_list[ranking], y_ft_list[ranking], ranking
+    return ranking
