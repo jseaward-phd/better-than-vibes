@@ -7,10 +7,11 @@ Created on Tue Jan 21 17:08:39 2025
 """
 
 import numpy as np
-from sklearn.cluster import HDBSCAN
+from sklearn.cluster import DBSCAN, HDBSCAN
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import cdist, pdist
+from copy import deepcopy
 from prettytable import PrettyTable
 from tqdm import tqdm
 
@@ -246,6 +247,7 @@ def rank_by_scores(
     big_first: Optional[Sequence[bool]] = None,
     sort_order: Optional[Sequence[int]] = None,
     verbose: bool = True,
+    rank_tol: Optional[Sequence[Optional[float]]] = None,
 ) -> np.ndarray[int]:
     if verbose:
         var_names = []
@@ -272,15 +274,22 @@ def rank_by_scores(
     # most imortant attribute should be sorted on last. This assumes attributes in scores_list are in order of importance
     if sort_order is None:
         sort_order = np.arange(len(score_lists))[::-1]
-    rank = np.arange(len(score_lists[0]))
+    if rank_tol is None:
+        rank_tol = [None] * len(score_lists)
+    sort_idx = np.arange(len(score_lists[0]))
     for attribute_idx in sort_order:
         # np argsort leaves ties in previous order so the last rankng is the mmost important with previous rankings showing through in ties
-        rank = rank[np.argsort(score_lists[attribute_idx][rank], kind="stable")]
+        if rank_tol[attribute_idx] is None:
+            sort_idx = np.argsort(score_lists[attribute_idx])
+        else:
+            sort_idx = fuzzy_argrank(
+                score_lists[attribute_idx], rank_tol[attribute_idx], big_first=False
+            )
         if verbose:
             tab = PrettyTable()
             tab.title = f"{var_names[attribute_idx]}"
             tab.add_column("Input index", np.arange(len(score_lists[0])))
-            tab.add_column("Rank", rank)
+            tab.add_column("Rank", sort_idx.argsort() + 1)
             tab.add_column(
                 "Value", score_lists[attribute_idx] * big_first[attribute_idx]
             )
@@ -288,8 +297,8 @@ def rank_by_scores(
     if verbose:
         print("Values of 0.0 indicate a dataset excluded during the threshold checks.")
         print("Dropped sets are assigned a 'rank' of -1.")
-    rank = np.where(to_keep, rank, -1)
-    return rank.astype(int)
+    sort_idx = np.where(to_keep, sort_idx, -1)
+    return sort_idx.astype(int)
 
 
 def select_ft_sets(
@@ -324,3 +333,22 @@ def select_ft_sets(
     if return_sorted:
         return X_ft_list[ranking], y_ft_list[ranking], ranking
     return ranking
+
+
+##### Utilies #####
+
+
+def fuzzy_argrank(
+    arr: Sequence[Union[float, int]],
+    tol: float = 0.05,
+    big_first: bool = False,
+):
+    # leaves groups of nearby values unordered
+    assert tol > 0, "Just use np.argsort, then..."
+    arr = np.array(arr)
+    clusterer = DBSCAN(eps=tol, min_samples=2)
+    cluster_idxs = clusterer.fit_predict(arr.reshape(-1, 1))
+    arr2 = deepcopy(arr)
+    for i in range(cluster_idxs.max() + 1):
+        arr2 = np.where(cluster_idxs == i, arr[cluster_idxs == i].mean(), arr2)
+    return np.argsort(arr2)[::-1] if big_first else np.argsort(arr2, kind="stable")
