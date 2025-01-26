@@ -1,11 +1,20 @@
+## bytecode files
 __pycache__
+
+## stuff for extension to image embeddings
 data/*
 runs/*
-*~
-.ipynb_checkpoints/
-.virtual_documents/
-*.pkl
-*.pt
-.spyproject/*
 PyTorchVAE/
 vae_module.py
+
+## intermediate test data/results
+*.pkl
+*.pt
+
+## auotsaves
+*~
+.ipynb_checkpoints/
+
+## spyder files
+.spyproject/*
+.virtual_documents/
