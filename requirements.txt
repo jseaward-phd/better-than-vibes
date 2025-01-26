@@ -1,0 +1,6 @@
+scikit-learn>=1.3
+prettytable>1
+scipy>=0.12.0
+pandas
+openml
+tqdm
