@@ -11,10 +11,22 @@ import pandas as pd
 import openml
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
-import umap
+from typing import Union, Optional, Sequence
+
+# import umap # save this for later
 
 
-def dataset2df(ds, class_cols=None, scale=True, X_df=False):
+def dataset2df(
+    ds: Union[int, str, openml.datasets.OpenMLDataset],
+    class_cols: Optional[Union[str, Sequence[str]]] = None,
+    scale: bool = True,
+    X_df: bool = False,
+    verbose: bool = True,
+):
+    if not isinstance(ds, openml.datasets.OpenMLDataset):
+        ds = openml.datasets.get_dataset(dataset_id=ds)
+    if verbose:
+        print(ds)
     df, *_ = ds.get_data()
 
     if scale:
@@ -36,13 +48,6 @@ def dataset2df(ds, class_cols=None, scale=True, X_df=False):
         le = LabelEncoder()
         y = le.fit_transform(y)
         return df, X, y
-
-
-def getdata(openml_id: int = 44156, verbose=True):
-    ds = openml.datasets.get_dataset(dataset_id=openml_id)
-    if verbose:
-        print(ds)
-    return ds
 
 
 def get_core_train_sample(
@@ -68,13 +73,13 @@ def get_core_train_sample(
     return fold_idx_list_out, representatives.astype(int)
 
 
-def embedd_with_umap(df, embedding_dim=10, metric="euclidean", scale=True):
-    reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
-    if scale:
-        scaler = StandardScaler()
-        data = scaler.fit_transform(df.loc[:, df.dtypes == "float"])
-    else:
-        data = df.loc[:, df.dtypes == "float"].values
+# def embedd_with_umap(df, embedding_dim=10, metric="euclidean", scale=True):
+#     reducer = umap.UMAP(n_components=embedding_dim, metric=metric)
+#     if scale:
+#         scaler = StandardScaler()
+#         data = scaler.fit_transform(df.loc[:, df.dtypes == "float"])
+#     else:
+#         data = df.loc[:, df.dtypes == "float"].values
 
-    reducer.fit(data)
-    return reducer
+#     reducer.fit(data)
+#     return reducer

@@ -16,10 +16,9 @@ from prettytable import PrettyTable
 from tqdm import tqdm
 
 
-from typing import Optional, Sequence, Union, Tuple
-from sklearn.base import BaseEstimator
+from typing import Optional, Sequence, Union, Tuple, Callable
 
-from btv import prediction_info, fit_dknn_toXy, estimate_rateVSchance
+from core import prediction_info, fit_dknn_toXy, estimate_rateVSchance
 
 
 # %%
@@ -29,9 +28,31 @@ from btv import prediction_info, fit_dknn_toXy, estimate_rateVSchance
 def make_low_info_mask(
     X: np.ndarray,
     y: Sequence[int],
-    metric: str = "euclidean",
+    metric: Union[str, Callable] = "euclidean",
     thresh: Union[int, float] = 0,
 ) -> Sequence[bool]:
+    """
+    Pick out the data points whose labels provide information below the threshhold, given the other labelled points in the set.
+
+    Parameters
+    ----------
+    X : M x N np.ndarray
+        Data points, with M samples and N features.
+    y : Sequence[int]
+        Data labels.
+    metric : Union[str,Callable], optional
+        scipy distance metric to use. The default is "euclidean".
+    thresh : Union[int, float], optional
+        Maximum information in bits a label can provide to be considered 'low-information'
+        and return a 'True' in the output mask.
+        The default is 0.
+
+    Returns
+    -------
+    Sequence[bool]
+        Low-info mask. "True" means the sample at that index has info<=thresh.
+
+    """
     clf_knn_selfdrop = fit_dknn_toXy(
         X, y, k=X.shape[1] * 2, metric=metric, self_exlude=True
     )
@@ -51,7 +72,7 @@ def get_exterior_pnts(X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 def prune_by_knn_info(
     X: np.ndarray,
     y: Sequence[int],
-    clf: Optional[BaseEstimator] = None,
+    clf=None,
     metric: str = "euclidean",
     thresh: Union[int, float] = 0,
 ) -> np.ndarray[int]:
@@ -70,7 +91,7 @@ def prune_by_knn_info(
 def prune_by_info(
     X,
     y,
-    clf: Optional[BaseEstimator] = None,
+    clf=None,
     metric: str = "euclidean",
     thresh: Union[int, float] = 0,
     keep_hull=False,

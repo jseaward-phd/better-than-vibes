@@ -79,8 +79,8 @@ from scipy.spatial import QhullError
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.model_selection import train_test_split
 
-ds = data_tab.getdata(44156, verbose=False)
-df, X, y = data_tab.dataset2df(ds, class_cols=["class"])
+# ds = data_tab.getdata(44156, verbose=False)
+df, X, y = data_tab.dataset2df(61, class_cols=["class"], verbose=False,X_df=False)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
 clf = GradientBoostingClassifier(

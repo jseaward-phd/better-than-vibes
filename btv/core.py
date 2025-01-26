@@ -5,43 +5,47 @@ Created on Tue Oct  1 17:48:54 2024
 
 @author: JSeaward
 """
-import argparse
 
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
 from sklearn.model_selection import (
-    train_test_split,  # can just train/test split np.arange(len(ds)) to get back indeces for large sets
-    StratifiedKFold,  # use X = np.zeros(n_samples) in .split
-)  # if you have indeces and want knns from large set, can make an idx array and NearestVectorCaller._call_vec_set
+    StratifiedKFold,
+)  # use X = np.zeros(n_samples) in .split
+
+# if you have indeces and want knns from large set, can make an idx array and NearestVectorCaller._call_vec_set
 import numpy as np
 import pandas as pd
 from copy import deepcopy
-from tqdm import tqdm, trange
-from typing import Optional, Protocol
+from tqdm import trange
+
+from typing import Optional, Sequence, Union, Callable
+label_set = Union[Sequence[int],np.ndarray[Sequence[int]]]  ## start here
+# from sklearn.base import BaseEstimator
+
+# %%
 
 
-def mean_gen(data):
-    n = 0
-    mean = 0.0
+def dist_weight_ignore_self(dist: np.array) -> np.array[float]:
+    """
+    Custom weighting function for a dknn that ignores points already in the fit set.
+    That means that if the distance to a point in the fit set is 0, that point is ignored
+    and the estimation is made on the distance to the remaining points in training set.
+    Adapted from 'distance' weighting function at https://github.com/scikit-learn/scikit-learn/blob/main/sklearn/neighbors/_base.py#L81
 
-    for x in data:
-        n += 1
-        mean += (x - mean) / n
+    Parameters
+    ----------
+    dist : np.array
+        Array of distances to use a weights.
 
-    if n < 1:
-        return float("nan")
-    else:
-        return mean
+    Returns
+    -------
+    dist : np.array[float]
+        Weights for classifier.
 
-
-# custom weighting function for a dknn that ignores points already in the fit set.
-def dist_weight_ignore_self(dist):
+    """
     if dist.dtype is np.dtype(object):
         for point_dist_i, point_dist in enumerate(dist):
-            # check if point_dist is iterable
-            # (ex: RadiusNeighborClassifier.predict may set an element of
-            # dist to 1e-6 to represent an 'outlier')
             if hasattr(point_dist, "__contains__") and 0.0 in point_dist:
                 dist[point_dist_i] = point_dist == 0.0
             else:
@@ -54,65 +58,88 @@ def dist_weight_ignore_self(dist):
     return dist
 
 
-# only include p if y==1 or, really, want p(right answer) so take elemnt of predicted prob indicated by binary y.
-def prediction_info_multilabel(
-    y_true, y_predicted
-):  # for multilabel classification NOT WORKINNG
-    if isinstance(y_predicted, list):
-        y_predicted = np.stack(y_predicted, axis=1)
-    class_num = 1 if len(y_true.shape) == 1 else y_true.shape[1]
-    y_true = y_true.reshape([-1, class_num])
-    y_predicted = y_predicted.reshape([-1, class_num, 2])
-    A = np.zeros_like(y_true)
-    with np.errstate(divide="ignore"):
-        for i, (pred, true) in enumerate(zip(y_predicted, y_true)):
-            for j, (p, t) in enumerate(zip(pred, true)):
-                I = -np.log(p[t] / 2 + 1 / 2) / np.log(2)  # bits
-                if np.isinf(I):
-                    I = y_true.size
-                A[i, j] = I
-    return A
+def prediction_info(
+    y_true: Sequence[int], y_predicted: np.ndarray[float], discount_chance: bool = False
+) -> np.ndarray[float]:
+    """
+    The information remaining in a label given a predicted label.
+    If the predicted label is 100% certain and correct, the true label contains no information,
+    Function assumes that the classification is a single label, which may be multi-class.
 
+    Parameters
+    ----------
+    y_true : Sequence[int]
+        Corrent labels.
+    y_predicted : np.ndarray[float]
+        Predicted Labels.
+    discount_chance : bool, optional
+        Whether or not to discount the effects of chance when calculating the information provided by a label.
+        Useful when trying to estimate how much a model has learned.
+        Apriori, a classifier has a chance of 1/class_number of guessing the right answer.
+        Should that floor be counted as information provided by the label?
+        The default is False.
 
-def prediction_info(y_true, y_predicted, discount_chance=False):
-    # for classification with a single, binary label, otherwize need to selecet with the true label differently and replace 2 with 2^{# of labels} or do a sum over labels
+    Returns
+    -------
+    A : np.ndarray
+        The information remaining in each label in y_true given y_predicted.
+
+    """
+    #
     A = []
-    if isinstance(y_predicted, list):
-        y_predicted = np.stack(y_predicted, axis=1)
-        classes = y_predicted.shape[2] - 1
-        for pred, true in zip(y_predicted, y_true):
-            if discount_chance:
-                I = [
-                    -np.log(p[t] + 1 / 2**classes) / np.log(2)
-                    for p, t in zip(pred, true)
-                ]
-            else:
-                I = [
-                    -np.log(p[t] / (2**classes) + 1 / (2**classes)) / np.log(2)
-                    for p, t in zip(pred, true)
-                ]
-            A.append(I)
-    else:
-        classes = y_predicted.shape[1] - 1
-        for pred, true in zip(y_predicted, y_true):
-            I = (
-                -np.log(pred[true] / (2**classes) + 1 / (2**classes)) / np.log(2)
-                if not discount_chance
-                else -np.log(pred[true] + 1 / 2**classes) / np.log(2)
-            )  # bits
-            A.append(I)
+    classes = y_predicted.shape[1] - 1
+    for pred, true in zip(y_predicted, y_true):
+        # the +1 and the denominator cause a sure, wrong anser to provide 1 bit instead of infinite information
+        I = (
+            -np.log2(pred[true] / (2**classes) + 1 / (2**classes))
+            if not discount_chance
+            else -np.log2(pred[true] + 1 / 2**classes)
+        )  # bits
+        A.append(I)
     A = np.array(A)
     A = np.where(A >= 0, A, 0)
     return A
 
 
-def prediction_entropy(y_true, y_predicted, drop_zeros=False, discount_chance=True):
-    A = prediction_info(y_true, y_predicted, discount_chance=discount_chance)
-    H = np.mean(A[A.nonzero()], axis=0) if drop_zeros else np.mean(A, axis=0)
-    return H
+def prediction_info_multilabel(
+    y_true: Union[Sequence[np.ndarray[int]], np.ndarray[int]],
+    y_predicted: Union[Sequence[np.ndarray[float]], np.ndarray[float]],
+    discount_chance: bool = False,
+) -> np.ndarray[float]:
+    """
+    The information remaining in a label given a predicted label.
+    For multi-label models.
+
+    Parameters
+    ----------
+    y_true : Union[Sequence[np.ndarray[int]], np.ndarray[int]]
+        Correct labels.
+    y_predicted : Union[Sequence[np.ndarray[float]], np.ndarray[float]]
+        Predicted Labels.
+    discount_chance : bool, optional
+        Whether or not to discount the effects of chance when calculating the information provided by a label.
+        Useful when trying to estimate how much a model has learned.
+        Apriori, a classifier has a chance of 1/class_number of guessing the right answer.
+        Should that floor be counted as information provided by the label?
+        The default is False.
+
+    Returns
+    -------
+    np.array
+        The information remaining in each label in y_true given y_predicted.
+
+    """
+    if isinstance(y_predicted, np.ndarray):
+        y_predicted = [x.squeeze() for x in np.split(y_predicted, y_predicted.shape[0])]
+    A = []
+    for y_t, y_p in zip(y_true, y_predicted):
+        A.append(prediction_info(y_t, y_p))
+    return np.array(A)
 
 
-def _chance_info(y, class_num: Optional[int] = None, use_freq: bool = True):
+def _chance_info(
+    y, class_num: Optional[int] = None, use_freq: bool = True
+) -> Union[float, int]:
     if use_freq:
         # assumes y is a label set, not a prediction set
         classes, counts = np.unique(y, return_counts=True)
@@ -127,7 +154,9 @@ def _chance_info(y, class_num: Optional[int] = None, use_freq: bool = True):
     return info
 
 
-def _chance_info_multilabel(y, class_num: Optional[int] = None, use_freq: bool = True):
+def _chance_info_multilabel(
+    y, class_num: Optional[int] = None, use_freq: bool = True
+) -> np.ndarray:
     # expects y to be N x class_num with each row having the form [p(c1), p(c2), ...]
     if use_freq:
         # assumes y is a label set, not a prediction set
@@ -142,17 +171,38 @@ def _chance_info_multilabel(y, class_num: Optional[int] = None, use_freq: bool =
     return info
 
 
-def chance_info(y, class_num: Optional[int] = None, use_freq: bool = True):
+def chance_info(
+    y: Union[Sequence[Union[int, float]], np.ndarray],
+    class_num: Optional[int] = None,
+    use_freq: bool = True,
+) -> Union[np.ndarray, float, int]:
+    """
+    Calculate the information remaining in a set of labels, given simple statistical assumptions.
+    For example, there is 25% chance of classifying something correctly out of four classes.
+    Therefore, a 4-class label provides 2 bits of information.
+
+    Parameters
+    ----------
+    y : Union[Sequence[Union[int,float]],np.ndarray]
+        A set of labels.
+    class_num : Optional[int], optional
+        Force an number of classes. The default is None, letting the function infer it from y.
+    use_freq : bool, optional
+        Calculte the probability of each value of y to be its frequency in y.
+        The default is True, requiring y to be a label set containing integer labels.
+        Passing 'False' will use only the shape of y and assume even distribution of label values.
+
+    Returns
+    -------
+    Union[np.ndarray,float,int]
+        Information remaining in the set given simple s tatistics.
+
+    """
     args = [y, class_num, use_freq]
     return _chance_info_multilabel(*args) if np.ndim(y) > 1 else _chance_info(*args)
 
 
-def estimate_rateVSchance(X, y, clf=None, use_freq=True, metric="euclidean"):
-    _clf = fit_dknn_toXy(X, y, metric=metric, self_exlude=True) if clf is None else clf
-    return _extraction_rateVSchance(X, y, _clf, use_freq)
-
-
-def _extraction_rateVSchance(X, y, _clf, use_freq=True):
+def _extraction_rateVSchance(X, y, _clf, use_freq: bool = True) -> float:
     info_baseline = chance_info(y, use_freq=use_freq)
     info = prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
     info_rate = (info_baseline - info) / info_baseline
@@ -160,37 +210,86 @@ def _extraction_rateVSchance(X, y, _clf, use_freq=True):
     return info_rate
 
 
-# This checks how much information a finetuning set X_train/y_train contains about test set X_test/y_test that clf does not have already. #TODO:make idx version
-def est_info_about_test_set_in_train_set(
-    X_train,
-    y_train,
-    X_test,
-    y_test,
+def estimate_rateVSchance(
+    X: np.ndarray,
+    y: Sequence[int],
     clf=None,
-    discount_chance=True,
-):
+    use_freq: bool = True,
+    metric: Union[str, Callable] = "euclidean",
+) -> float:
+    """
+    Estimate the information extraction rate of a model on a dataset.
 
-    _clf = fit_dknn_toXy(X_train, y_train) if clf is None else deepcopy(clf)
-    residual_info = prediction_info(
-        y_test, _clf.predict_proba(X_test), discount_chance=discount_chance
-    ).sum()
-    p_chance = 1 / len(np.unique(y_test))
-    test_info = -np.sum(np.log(p_chance) / np.log(2)) * len(y_test)
-    return (
-        test_info - residual_info
-    )  # info needed - info left after training = info in train set
+    Parameters
+    ----------
+    X : M x N np.ndarray
+        Data points, with M samples and N features.
+    y : Sequence[int]
+        Data labels.
+    clf : sklearn-style Classifier, optional
+        Classifier to use. Needs only a clf.predict_proba method.
+        The default is None, where a self-excluing dknn will be used.
+        See documentation of dist_weight_ignore_self for more details.
+    use_freq : bool, optional
+        Use the frequency of label values to calculate chance info rate.
+        The default is True.
+    metric : Union[str,Callable], optional
+        scipy distance metric to use if building the d-knn classifier.
+        The default is "euclidean".
+
+    Returns
+    -------
+    float
+        Percentage of the inforamtion in the dataset (X,y) which clf has learned.
+
+    """
+    _clf = fit_dknn_toXy(X, y, metric=metric, self_exlude=True) if clf is None else clf
+    return _extraction_rateVSchance(X, y, _clf, use_freq)
 
 
 def cal_info_about_test_set_in_finetune_set(
-    X_train,
-    y_train,
-    X_ft,
-    y_ft,
-    X_test,
-    y_test,
+    X_train: np.ndarray,
+    y_train: Sequence[int],
+    X_ft: np.ndarray,
+    y_ft: Sequence[int],
+    X_test: np.ndarray,
+    y_test: Sequence[int],
     clf=None,
-    discount_chance=True,
-):
+    discount_chance: bool = True,
+) -> float:
+    """
+    Calculate the infornation about a test set (X_test,y_test) a fine-tuning set (X_ft,y_ft) provides,
+    given training has already been performed on (X_train,y_train)
+
+    Parameters
+    ----------
+    X_train : np.ndarray
+        Data features for training.
+    y_train : Sequence[int]
+        Data labels for training.
+    X_ft : np.ndarray
+        Data features for fine-tuning.
+    y_ft : Sequence[int]
+        Data labels for fine-tuning.
+    X_test : np.ndarray
+        Data features for testing.
+    y_test : Sequence[int]
+        Data labels for testing.
+    clf : sklearn style classifier, optional
+        Classifier to be tested. Requires .fit(X,y) and .predict_proba(X) methods
+        The default is None, where a dknn will be used.
+    discount_chance : bool, optional
+        Whether or not to discount the effects of chance when calculating the information.
+        See docstring of `prediction_info` for more detail.
+        The default is True.
+
+    Returns
+    -------
+    rel_info : float
+        Difference in information left in the Test set after training with the fine-tuning set.
+        Lower is better. Measured in bits.
+
+    """
     if clf is None:
         _clf = fit_dknn_toXy(X_train, y_train)
     else:
@@ -209,7 +308,12 @@ def cal_info_about_test_set_in_finetune_set(
     return rel_info
 
 
-def pick_nearest2test(X_train, y_train, X_test, y_test):
+def pick_nearest2test(
+    X_train: np.ndarray,
+    y_train: Sequence[int],
+    X_test: np.ndarray,
+    y_test: Sequence[int],
+) -> Sequence[int]:
     clf_knn = fit_dknn_toXy(X_train, y_train)
     full_train_test_info_residual = np.sum(
         prediction_info(y_test, clf_knn.predict_proba(X_test))
@@ -235,122 +339,8 @@ def pick_nearest2test(X_train, y_train, X_test, y_test):
     return train0_idxs
 
 
-def prune_training_set(
-    X,
-    y,
-    test_idx=None,
-    k=None,
-    return_smaller_sets=True,
-    return_mask=True,  # mask or indicies
-    thresh=0,
-    metric="euclidean",
-    discount_chance=False,
-):
-    # maybe do this in rounds to avoid dropping all the examples in isolated clusters, or try radius clf. Will need to do rounds anyway for big sets...
-    if test_idx is None:
-        X_test, y_test = None, None
-    else:
-        if isinstance(test_idx[0], tuple) and len(test_idx[0]) == 2:
-            X_test, y_test = test_idx[:]
-        else:
-            allidx = np.arange(len(X))
-            train_idx = np.setdiff1d(allidx, test_idx)
-            X_train, y_train, X_test, y_test = (
-                X[train_idx],
-                y[train_idx],
-                X[test_idx],
-                y[test_idx],
-            )
-
-    if X_test is not None:
-        tiny_idx, tiny_y = collect_min_set(y_train, k)
-        tiny_x = X_train[tiny_idx]
-        clf_knn = fit_dknn_toXy(
-            tiny_x, tiny_y, k=k, metric=metric
-        )  # fit an initial knn for whole train info estimation
-
-        min_train_test_info_residual = np.sum(
-            prediction_info(y_test, clf_knn.predict_proba(X_test))
-        )
-        full_train_test_info = est_info_about_test_set_in_train_set(
-            X_train, y_train, X_test, y_test, clf_knn
-        )
-        clf_knn.fit(X_train, y_train)
-        full_train_test_info_residual = np.sum(
-            prediction_info(y_test, clf_knn.predict_proba(X_test))
-        )
-        # TODO: More user-friendly names
-        print("full train set size: ", y_train.size)
-        print("full_train_test_info: ", full_train_test_info)
-        print("min_train_test_info_residual: ", min_train_test_info_residual)
-        print("full_train_test_info_residual: ", full_train_test_info_residual)
-        print("full train knn score: ", clf_knn.score(X_test, y_test))
-    else:
-        X_train, y_train = X, y
-
-    clf_knn_selfdrop = fit_dknn_toXy(X_train, y_train, metric=metric, self_exlude=True)
-    info = prediction_info(
-        y_train,
-        clf_knn_selfdrop.predict_proba(X_train),
-        discount_chance=discount_chance,
-    )
-
-    ##not sure this is meaningful:
-    train_self_info = info.sum(0)
-    print("Train set self-info:", train_self_info)
-    if info.ndim > 1:
-        info = info.sum(1)
-
-    if test_idx is not None:
-        # sorted_X, sorted_y, info = order_samples_by_info(
-        #     X_train, y_train, clf_knn_selfdrop, sort_info=False
-        # )
-        tiny_idx, tiny_y = collect_min_set(y_train, k)
-        tiny_x = X_train[tiny_idx]
-        clf_knn.fit(
-            tiny_x, tiny_y
-        )  # need a real function for this. One that is of minimum size but includes all classes.
-        self_pruned_train_test_info = est_info_about_test_set_in_train_set(
-            X_train[info > thresh], y_train[info > thresh], X_test, y_test, clf_knn
-        )
-        print("Self-pruned train set size: ", y_train[info > thresh].size)
-        print("self_pruned_train_test_info: ", self_pruned_train_test_info)
-        clf_knn.fit(X_train[info > thresh, :], y_train[info > thresh])
-        self_pruned_train_test_info_residual = np.sum(
-            prediction_info(y_test, clf_knn.predict_proba(X_test))
-        )
-        print(
-            "self_pruned_train_test_info_residual: ",
-            self_pruned_train_test_info_residual,
-        )
-        print("self_pruned_score: ", clf_knn.score(X_test, y_test))
-
-    selected_training_mask = (
-        info > thresh if return_mask else np.arange(len(y_train))[info > thresh]
-    )
-    print(
-        "Length of pruned training set: ",
-        np.sum(selected_training_mask),
-        f" %size of original: {100*np.sum(selected_training_mask)/len(y_train):.2f}.",
-    )
-    if return_smaller_sets:
-        X_train_selected, y_train_selected = (
-            X_train[np.arange(len(y_train))[selected_training_mask], :],
-            y_train[selected_training_mask],
-        )
-        return (
-            X_train_selected,
-            y_train_selected,
-            selected_training_mask,
-            train_self_info,
-            info,
-        )
-    else:
-        return selected_training_mask, train_self_info, info
-
-
 def order_folds_by_entropy(
-    X, y, clf, fold_idxs: list, reverse=True, info=False
+    X:np.ndarray, y, clf, fold_idxs: list, reverse=True, info=False
 ):  # reverse = True sorts highest to lowest, so prioratize the training data that the model, as provided, knows the least about.
     Hs = []
     for idxs in fold_idxs:
@@ -360,7 +350,7 @@ def order_folds_by_entropy(
             else clf.predict_proba(X[idxs])
         )
         score = (
-            np.sum(prediction_entropy(y[idxs], y_predicted))
+            np.sum(estimate_rateVSchance(X[idxs], y[idxs], clf=clf))
             if not info
             else np.sum(prediction_info(y[idxs], y_predicted))
         )
@@ -408,7 +398,13 @@ def order_samples_by_info(
 
 
 # %%  Models  ###
-def fit_dknn_toXy(X, y, k: Optional[int] = None, metric="euclidean", self_exlude=False):
+def fit_dknn_toXy(
+    X: np.ndarray,
+    y: Sequence[int],
+    k: Optional[int] = None,
+    metric: Union[str, Callable] = "euclidean",
+    self_exlude: bool = False,
+):
     if k is None:
         k = X.shape[1] * 2  # 2 neighbors per feature
     weights = dist_weight_ignore_self if self_exlude else "distance"
@@ -417,16 +413,6 @@ def fit_dknn_toXy(X, y, k: Optional[int] = None, metric="euclidean", self_exlude
         clf.fit(X.values, y)
     else:
         clf.fit(X, y)
-    return clf
-
-
-def fit_dknn_toUMAP_reducer(
-    reducer, y_train, k: Optional[int] = None, metric="euclidean"
-):
-    if k is None:
-        k = reducer.embedding.shape[1] * 2  # 2 neighbors per feature
-    clf = KNeighborsClassifier(n_neighbors=k, metric=metric, weights="distance")
-    clf.fit(reducer.embedding_, y_train)
     return clf
 
 
@@ -460,9 +446,8 @@ def add_stratified_folds_test(
     for k, old_test_idx in enumerate(running_train):
         train_idx = np.append(train_idx, old_test_idx).astype(int)
         clf.fit(X[train_idx], y[train_idx])
-        y_predicted = clf.predict_proba(X[running_test])
         y_true = y[running_test]
-        H = prediction_entropy(y_true, y_predicted)
+        H = estimate_rateVSchance(X[running_test], y[running_test], clf=clf)
         score = clf.score(X[running_test], y_true)
         entropies.append(H)
         scores.append(score)
@@ -508,9 +493,8 @@ def add_best_fold_first_test(
         running_train.remove(list(best_fold_idxs))
 
         clf.fit(X[train_idx], y[train_idx])
-        y_predicted = clf.predict_proba(X[running_test])
         y_true = y[running_test]
-        H = prediction_entropy(y_true, y_predicted)
+        H = estimate_rateVSchance(X[running_test], y_true, clf=clf)
         score = clf.score(X[running_test], y_true)
         entropies.append(np.sum(H))
         scores.append(score)
@@ -530,7 +514,7 @@ def extraction_rate(clf, X_train, y_train, n=1, entropy=True, mean=True):
     for i in range(n):
         clf.fit(X_train, y_train)
         a = (
-            prediction_entropy(y_train, clf.predict_proba(X_train))
+            estimate_rateVSchance(X_train, y_train, clf=clf)
             if entropy
             else np.sum(prediction_info(y_train, clf.predict_proba(X_train)))
         )
@@ -580,8 +564,7 @@ def train_best_fold_first_test(
         running_train.remove(list(best_fold_idxs))
 
         clf.fit(X[train_idx], y[train_idx])
-        y_predicted = clf.predict_proba(X[running_test])
-        H = prediction_entropy(y_true, y_predicted)
+        H = estimate_rateVSchance(X[running_test], y_true, clf=clf)
         score = clf.score(X[running_test], y_true)
         if H < best_H:
             best_idxs = train_idx
