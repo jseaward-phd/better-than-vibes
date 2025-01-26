@@ -4,3 +4,4 @@ scipy>=0.12.0
 pandas
 openml
 tqdm
+jupyter
