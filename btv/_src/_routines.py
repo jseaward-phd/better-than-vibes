@@ -23,6 +23,7 @@ from typing import Sequence
 from pandas import DataFrame
 from .custom_types import Data_Features, Label_Set
 
+
 # %%
 def pick_nearest2test(
     X_train: Data_Features,
@@ -53,6 +54,7 @@ def pick_nearest2test(
         selected_train_test_info_residual,
     )
     return train0_idxs
+
 
 def cal_info_about_test_set_in_finetune_set(
     X_train: Data_Features,
@@ -114,6 +116,7 @@ def cal_info_about_test_set_in_finetune_set(
     )
     return rel_info
 
+
 def order_samples_by_info(
     X, y, clf, reverse=True, sort_info=False
 ):  # reverse = True sorts highest to lowest, so prioratize the training data that the model, as provided, knows the least about.
@@ -148,6 +151,7 @@ def order_samples_by_info(
         info = info[::-1]
     return sorted_X, np.array(sorted_y), info
 
+
 def add_stratified_folds_test(
     X, y, clf, n_splits=10, verbose=True
 ):  # should do some without stratification to show the difference.
@@ -177,6 +181,7 @@ def add_stratified_folds_test(
                 f"Score : {score}",
             )
     return samples, entropies, scores
+
 
 def add_best_fold_first_test(
     X, y, clf, n_splits=10, X_test=None, verbose=True

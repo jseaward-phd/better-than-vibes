@@ -29,6 +29,7 @@ from .custom_types import (
 
 # from sklearn.base import BaseEstimator
 
+
 # %%
 def _prediction_info_singlelabel(
     y_true: Single_Label_Set,
@@ -274,8 +275,13 @@ def estimate_rateVSchance(
 
 
 def extraction_rate(
-    clf, X_train: Data_Features, y_train: Label_Set, n: int = 1, rate: bool = True, refit:bool=False
-) -> Union[Sequence[float],float]:
+    clf,
+    X_train: Data_Features,
+    y_train: Label_Set,
+    n: int = 1,
+    rate: bool = True,
+    refit: bool = False,
+) -> Union[Sequence[float], float]:
     """
     Fit classifier to a training set n times and get the information extraction rate each time.
 
@@ -286,7 +292,7 @@ def extraction_rate(
     X_train : M x N Data_Features
         Data points, with M samples and N features.
     y_train : Label_Set
-        M data labels for X_train.                     
+        M data labels for X_train.
     n : int, optional
         Number of times to re-fit the classifier.
         The default is 1, suitable for deterministic classifiers.
@@ -316,7 +322,7 @@ def extraction_rate(
         )
         A.append(a)
 
-    return np.array(A) if n>1 else A[0]
+    return np.array(A) if n > 1 else A[0]
 
 
 def order_folds(
