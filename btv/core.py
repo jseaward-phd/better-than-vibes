@@ -108,7 +108,9 @@ def _prediction_info_multilabel(
         y_predicted = [x.squeeze() for x in np.split(y_predicted, y_predicted.shape[0])]
     A = []
     for y_t, y_p in zip(y_true, y_predicted):
-        A.append(_prediction_info_singlelabel(y_t, y_p, discount_chance=discount_chance))
+        A.append(
+            _prediction_info_singlelabel(y_t, y_p, discount_chance=discount_chance)
+        )
     return np.array(A)
 
 
@@ -118,7 +120,7 @@ def prediction_info(
     discount_chance: bool = False,
 ) -> np.ndarray:
     """
-    Unified caller for information content of single and multi-label 
+    Unified caller for information content of single and multi-label
     true/predicted label sets.-
 
     Parameters
@@ -157,7 +159,9 @@ def _chance_info(
 ) -> Union[float, int]:
     if use_freq:
         # assumes y is a label set, not a prediction set
-        assert y[0] == int(y[0]), "Please pass a label set (integer valuesd) to use frequnecy statistics."
+        assert y[0] == int(
+            y[0]
+        ), "Please pass a label set (integer valuesd) to use frequnecy statistics."
         classes, counts = np.unique(y, return_counts=True)
         classes = list(classes.astype(int))
         p = np.array([counts[classes.index(lbl)] / len(y) for lbl in y])
@@ -178,7 +182,9 @@ def _chance_info_multilabel(
     # expects y to be N x class_num with each row having the form [p(c1), p(c2), ...]
     if use_freq:
         # assumes y is a label set, not a prediction set
-        assert y.ravel()[0] == int(y.ravel()[0]), "Please pass a label set (integer valuesd) to use frequnecy statistics."
+        assert y.ravel()[0] == int(
+            y.ravel()[0]
+        ), "Please pass a label set (integer valuesd) to use frequnecy statistics."
         freq = np.sum(y, axis=0) / len(y)
         info = -np.log2(freq) * len(y)
     else:
@@ -225,7 +231,8 @@ def _extraction_rateVSchance(X, y, _clf, use_freq: bool = True) -> float:
     info_baseline = chance_info(y, use_freq=use_freq)
     info = prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
     info_rate = (info_baseline - info) / info_baseline
-    if info_rate < 0: print("INFO: The model is WORSE than guessing.")
+    if info_rate < 0:
+        print("INFO: The model is WORSE than guessing.")
     return info_rate
 
 
@@ -368,6 +375,7 @@ def order_folds(
 
 ##### Model and data setup functions  ####
 
+
 def dist_weight_ignore_self(dist: np.array) -> np.array:
     """
     Custom weighting function for a dknn that ignores points already in the fit set.
@@ -472,7 +480,7 @@ def collect_min_set(y: Label_Set, min_sz: int = 0) -> Tuple[list[int], Label_Set
     # for collecting a minimum set for initial clf fitting which contains all classes
     idxs_out = []
 
-    if np.ndim(y)>1:
+    if np.ndim(y) > 1:
         for y_val in np.unique(y, axis=0):
             idxs_out.append(np.where(np.all(y == y_val, axis=1))[0][0])
     else:
