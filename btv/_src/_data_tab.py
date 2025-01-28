@@ -16,7 +16,6 @@ from .custom_types import Label_Set
 
 # import umap # save this for later
 
-
 def dataset2df(
     ds: Union[int, str, openml.datasets.OpenMLDataset],
     class_cols: Optional[Union[str, Sequence[str]]] = None,
@@ -83,8 +82,7 @@ def dataset2df(
         le = LabelEncoder()
         y = le.fit_transform(y)
         return df, X, y
-
-
+        
 def get_core_train_sample(y: Label_Set, fold_idx_list: list[Sequence[int]]):
     """
     For collecting a minimum training set from a k-fold index list to be used

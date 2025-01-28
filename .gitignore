@@ -7,6 +7,10 @@ runs/*
 PyTorchVAE/
 vae_module.py
 
+## tools for me
+utils.py
+clustering.py
+
 ## intermediate test data/results
 *.pkl
 *.pt
