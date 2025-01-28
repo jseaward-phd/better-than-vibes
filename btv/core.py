@@ -157,11 +157,9 @@ def _chance_info(
 ) -> Union[float, int]:
     if use_freq:
         # assumes y is a label set, not a prediction set
-        assert isinstance(
-            y[0], int
-        ), "Please pass a label set (integer valuesd) to use frequnecy statistics."
+        assert y[0] == int(y[0]), "Please pass a label set (integer valuesd) to use frequnecy statistics."
         classes, counts = np.unique(y, return_counts=True)
-        classes = list(classes)
+        classes = list(classes.astype(int))
         p = np.array([counts[classes.index(lbl)] / len(y) for lbl in y])
         info = -np.log2(p).sum()
     else:
@@ -180,9 +178,7 @@ def _chance_info_multilabel(
     # expects y to be N x class_num with each row having the form [p(c1), p(c2), ...]
     if use_freq:
         # assumes y is a label set, not a prediction set
-        assert isinstance(
-            y.ravel()[0], int
-        ), "Please pass a label set (integer valuesd) to use frequnecy statistics."
+        assert y.ravel()[0] == int(y.ravel()[0]), "Please pass a label set (integer valuesd) to use frequnecy statistics."
         freq = np.sum(y, axis=0) / len(y)
         info = -np.log2(freq) * len(y)
     else:
@@ -229,7 +225,7 @@ def _extraction_rateVSchance(X, y, _clf, use_freq: bool = True) -> float:
     info_baseline = chance_info(y, use_freq=use_freq)
     info = prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
     info_rate = (info_baseline - info) / info_baseline
-    assert info_rate >= 0, "The model is WORSE than guessing?"
+    if info_rate < 0: print("INFO: The model is WORSE than guessing.")
     return info_rate
 
 
@@ -476,8 +472,12 @@ def collect_min_set(y: Label_Set, min_sz: int = 0) -> Tuple[list[int], Label_Set
     # for collecting a minimum set for initial clf fitting which contains all classes
     idxs_out = []
 
-    for y_val in np.unique(y, axis=0):
-        idxs_out.append(np.where(np.all(y == y_val, axis=1))[0][0])
+    if np.ndim(y)>1:
+        for y_val in np.unique(y, axis=0):
+            idxs_out.append(np.where(np.all(y == y_val, axis=1))[0][0])
+    else:
+        for y_val in np.unique(y):
+            idxs_out.append(np.where(y == y_val)[0][0])
 
     while len(idxs_out) < min_sz:
         idxs_out = np.union1d(
