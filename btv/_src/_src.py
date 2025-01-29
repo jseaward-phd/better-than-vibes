@@ -152,6 +152,32 @@ def prediction_info(
     )
 
 
+def estimate_info(
+    X: Data_Features, y: Label_Set, metric: Union[str, Callable] = "euclidean"
+) -> float:
+    """
+    High-level function to estimate the info in a set with a d-knn.
+
+    Parameters
+    ----------
+    X : M x N Data_Features
+        Data points, with M samples and N features.
+    y : Label_Set
+        Data labels.
+    metric : Union[str, Callable], optional
+        scipy distance metric to use if building the d-knn classifier.
+        The default is "euclidean."
+
+    Returns
+    -------
+    float
+        total information as estimated by the selfdrop d-knn classifier.
+
+    """
+    _clf = fit_dknn_toXy(X, y, metric=metric, self_exclude=True)
+    return prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
+
+
 def _chance_info(
     y: Union[Single_Label_Set, Single_Prediction_Set],
     class_num: Optional[int] = None,
@@ -274,7 +300,7 @@ def estimate_rateVSchance(
     return _extraction_rateVSchance(X, y, _clf, use_freq)
 
 
-def extraction_rate(
+def model_extraction_rate(
     clf,
     X_train: Data_Features,
     y_train: Label_Set,

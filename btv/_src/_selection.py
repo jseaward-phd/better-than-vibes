@@ -98,6 +98,7 @@ def prune_by_info(
     metric: str = "euclidean",
     thresh: Union[int, float] = 0,
     keep_hull: bool = False,
+    shuffle: bool = True,
 ) -> Sequence[int]:
     """
     Prune dataset (X,y) to only high-information points, and the convex hull (optional).
@@ -119,7 +120,8 @@ def prune_by_info(
     keep_hull : bool, optional
         Whether or not the returnd set should include the exterior points of X.
         The default is False.
-
+    shuffle : bool, optional
+        Whether to shuffle the returned indices. The default is True.
     Returns
     -------
     Sequence[int]
@@ -139,6 +141,8 @@ def prune_by_info(
     if keep_hull:
         _, hull_idxs = get_exterior_pnts(X)
         out_idxs = np.intersect1d(hull_idxs, out_idxs)
+    if shuffle:
+        np.random.shuffle(out_idxs)
     return out_idxs.astype(int)
 
 
