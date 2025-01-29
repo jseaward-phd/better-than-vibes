@@ -23,7 +23,7 @@ from prettytable import PrettyTable
 from tqdm import tqdm
 
 # BTV imports
-from ._src import prediction_info, fit_dknn_toXy, estimate_rateVSchance
+from ._src import prediction_info, fit_dknn_toXy, estimate_rateVSchance, estimate_info
 
 
 # %%
@@ -381,6 +381,48 @@ def select_via_test_overlap(
 ######### Tests and Fine-Tuning Set Rankings #############
 
 
+def _cut_by_info_magnitude(
+    X_ft_list: Sequence[Data_Features],
+    y_ft_list: Sequence[Label_Set],
+    test_info: float,
+    oom_margin: int = 1,
+    verbose=False,
+    to_keep: Optional[Sequence[bool]] = None,
+) -> Tuple[Sequence[bool], np.ndarray[float]]:
+    """
+    Estimates the information for a sequence of fine tuning sets and sets
+    a value of False in to_keep if the total info is oom_margin orders of magnitude lower
+    than test_info. Skips calculation if there is a False at the index in to_keep.
+
+    Returns
+    -------
+    to_keep : Sequence[bool]
+        Fine-tune sets to keep.
+    info_rates : np.ndarray, dtype=float
+
+    """
+    if to_keep is None:
+        to_keep = [True] * len(X_ft_list)
+    info_amounts = np.zeros(len(X_ft_list))
+    oom_test = np.log10(test_info)
+    for i, (X, y) in tqdm(
+        enumerate(zip(X_ft_list, y_ft_list)),
+        desc="Estimating self-information rate...",
+        total=len(X_ft_list),
+    ):
+        if to_keep[i]:
+            info = estimate_info(X, y)
+            if oom_test - np.log10(info) > oom_margin:
+                to_keep[i] = False
+                if verbose:
+                    print(
+                        f"INFO: Dropping fine tuning set at index {i}. It has estimated info of {info:0.4f}"
+                    )
+            else:
+                info_amounts[i] = info
+    return to_keep, info_amounts
+
+
 def _cut_by_info_rate(
     X_ft_list: Sequence[Data_Features],
     y_ft_list: Sequence[Label_Set],
@@ -418,7 +460,7 @@ def _cut_by_info_rate(
                     )
             else:
                 info_rates[i] = info_rate
-    return to_keep, np.array(info_rates)
+    return to_keep, info_rates
 
 
 def _cut_by_test_overlap(
@@ -458,7 +500,7 @@ def _cut_by_test_overlap(
                     )
             else:
                 overlaps[i] = overlap_percent
-    return to_keep, np.array(overlaps)
+    return to_keep, overlaps
 
 
 def _overflow_from_train(
@@ -646,15 +688,20 @@ def select_ft_sets(
 
     """
     global test_overlaps, info_rates, train_overflows  # makes the PrettyTables titles work
+    test_info = estimate_info(X_test, y_test)
     test_info_rate = estimate_rateVSchance(X_test, y_test)
     info_thresh = test_info_rate - test_info_rate * info_rate_tol
     if verbose:
+        print(f"Information of test set estimated at {estimate_info:.5f}.")
         print(f"Information rate of test set estimated at {test_info_rate:.5f}.")
         print(
             f"Fine-tune sets must have an information rate of {info_thresh:.5f} for inclusion."
         )
-    to_keep, info_rates = _cut_by_info_rate(
+    to_keep, info_amounts = _cut_by_info_magnitude(
         X_ft_list, y_ft_list, info_thresh, verbose=verbose
+    )
+    to_keep, info_rates = _cut_by_info_rate(
+        X_ft_list, y_ft_list, info_thresh, verbose=verbose, to_keep=to_keep
     )
     to_keep, test_overlaps = _cut_by_test_overlap(
         X_ft_list, X_test, overlap_thresh, verbose=verbose, to_keep=to_keep

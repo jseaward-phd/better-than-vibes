@@ -153,7 +153,10 @@ def prediction_info(
 
 
 def estimate_info(
-    X: Data_Features, y: Label_Set, metric: Union[str, Callable] = "euclidean"
+    X: Data_Features,
+    y: Label_Set,
+    metric: Union[str, Callable] = "euclidean",
+    mean: bool = False,
 ) -> float:
     """
     High-level function to estimate the info in a set with a d-knn.
@@ -167,6 +170,9 @@ def estimate_info(
     metric : Union[str, Callable], optional
         scipy distance metric to use if building the d-knn classifier.
         The default is "euclidean."
+    mean : bool, optinal
+        Whether or not to return the mean.
+        The default is False, returning the sum.
 
     Returns
     -------
@@ -175,7 +181,12 @@ def estimate_info(
 
     """
     _clf = fit_dknn_toXy(X, y, metric=metric, self_exclude=True)
-    return prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
+    out = (
+        prediction_info(y, _clf.predict_proba(X), discount_chance=False).mean()
+        if mean
+        else prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
+    )
+    return
 
 
 def _chance_info(
