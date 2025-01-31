@@ -10,6 +10,7 @@ vae_module.py
 ## tools for me
 utils.py
 clustering.py
+*.md
 
 ## intermediate test data/results
 *.pkl

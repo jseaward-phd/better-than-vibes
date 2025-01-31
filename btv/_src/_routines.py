@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Some routines packaged as function. See demo notebook for clearer understanding.
+Some big, messy routines packaged as functions. See demo notebook for clearer understanding.
 
 Created on Sun Jan 26 11:28:47 2025
 
@@ -12,14 +12,16 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from sklearn.model_selection import StratifiedKFold
 from copy import deepcopy
-from tqdm import trange
+from tqdm import trange, tqdm
+from matplotlib import pyplot as plt
 
-from ._src import prediction_info, fit_dknn_toXy, estimate_rateVSchance, order_folds
+from ._src import prediction_info, fit_dknn_toXy, estimate_rateVSchance, order_folds, chance_info
+from ._selection import prune_by_info
 
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 
-from typing import Sequence
+from typing import Sequence, Union, Tuple
 from pandas import DataFrame
 from .custom_types import Data_Features, Label_Set
 
@@ -55,6 +57,50 @@ def pick_nearest2test(
     )
     return train0_idxs
 
+def scan_info_thresh(    
+    X_train: Data_Features,
+    y_train: Label_Set,
+    X_test: Data_Features,
+    y_test: Label_Set,
+    clf,
+    max_info:Union[int,float]=1,
+    info_steps:int=100,
+    plot = True,
+    score_metric = "Accuracy",
+    keep_hull=False,
+)->Tuple[list[float],list[int],float]:
+    scores, lengths = [], []
+    thresholds = np.arange(0,max_info,max_info/info_steps)
+    for th in tqdm(thresholds, desc="Scanning information threshold..."):
+        idx_pruned = prune_by_info(X_train,y_train,thresh=th,keep_hull=keep_hull)
+        if len(idx_pruned) == 0:
+            while len(lengths)<info_steps:
+                lengths.append(0)
+                scores.append(0)
+            print(f"INFO: No points remaining with info>={th}.")
+            break
+        clf.fit(X_train[idx_pruned],y_train[idx_pruned])
+        lengths.append(len(idx_pruned)/len(y_train))
+        scores.append(clf.score(X_test,y_test))
+    
+    if plot:
+        plt.xlabel('Information threshold [bits]')
+        plt.title("Classification score with decresing training set information")
+        score_line = plt.plot(thresholds,scores, label="Score")
+        ax1 = plt.gca()
+        ax1.set_ylabel(f"Score ({score_metric})")
+        
+        ax2 = ax1.twinx()
+        length_line = ax2.plot(thresholds,lengths, color="g", label="Train set size")
+        ax2.set_ylabel("Fraction of training set used")
+
+        lines = score_line + length_line
+        lbls = [x.get_label() for x in lines]
+        plt.legend(lines, lbls)
+        
+        plt.show()
+        print(f"Max score of {max(scores):0.5f} at threshold of {thresholds[np.argmax(scores)]}.")
+    return scores, lengths, thresholds[np.argmax(scores)]
 
 def cal_info_about_test_set_in_finetune_set(
     X_train: Data_Features,
@@ -231,22 +277,23 @@ def add_best_fold_first_test(
 
 
 def train_best_fold_first_test(
-    X, y, clf, n_splits=100, verbose=False, tol=10, X_test=None
+    X, y, clf_in, n_splits=100, verbose=False, tol=10, test_idx:Union[Sequence[int],DataFrame]=None,
 ):  # should do some without stratification to show the difference. Should try selecting training set with info (as justged by inital clf) equal to ignorance in test set (ditto)
+    clf =deepcopy(clf_in)
     kfold_idx_gen = StratifiedKFold(n_splits=n_splits).split(X, y)
     train_idx = np.array([], int)
-    running_train, entropies, train_idx, scores, samples = [], [], [], [], []
+    running_train, rates, train_idx, scores, samples = [], [], [], [], []
     for k, (_, test_idx) in enumerate(kfold_idx_gen):
         running_train.append(test_idx)
     running_train = [list(x) for x in running_train]
     if isinstance(X, DataFrame):
         X = X.values
-    if X_test is None:
+    if test_idx is None:
         running_test = running_train.pop()
-    elif isinstance(X_test, DataFrame):
-        running_test = X_test.index
+    elif isinstance(test_idx, DataFrame):
+        running_test = test_idx.index
     else:
-        running_test = X_test
+        running_test = test_idx
     y_true = y[running_test]
 
     try:
@@ -258,7 +305,7 @@ def train_best_fold_first_test(
     iters = len(running_train)
     best_idxs = []
     last_best_k = 0
-    best_H = np.inf
+    best_r = 0
 
     for k in trange(iters):
         best_fold_idxs = order_folds(X, y, clf, running_train)[0]
@@ -266,26 +313,28 @@ def train_best_fold_first_test(
         running_train.remove(list(best_fold_idxs))
 
         clf.fit(X[train_idx], y[train_idx])
-        H = estimate_rateVSchance(X[running_test], y_true, clf=clf)
+        r = estimate_rateVSchance(X[running_test], y_true, clf=clf)
         score = clf.score(X[running_test], y_true)
-        if H < best_H:
+        if r > best_r:
             best_idxs = train_idx
             last_best_k = k
-            best_H = H
-        entropies.append(H)
+            best_r = r
+        rates.append(r)
         scores.append(score)
         samples.append(len(train_idx))
         if verbose:
             print(
-                f"Fold : {k+1}, " f"Test set entropy : {np.mean(H)}",
+                f"Fold : {k+1}, " f"Test set info rate : {r}",
                 f"Train samples : {len(train_idx)}",
                 f"Score : {score}",
             )
         if k - last_best_k >= tol:
             print(
-                f"No improvement found after adding {k - last_best_k} folds ({len(train_idx) - len(best_idxs)} samples). Fitting on {last_best_k} folds, {len(best_idxs)} smaples."
+                f"No improvement in information rate found after adding {k - last_best_k} folds ({len(train_idx) - len(best_idxs)} samples). Fitting on {last_best_k} folds, {len(best_idxs)} smaples."
             )
             break
 
-    clf.fit(X[best_idxs], y[best_idxs])
-    return samples, entropies, scores, best_idxs
+    clf_in.fit(X[best_idxs], y[best_idxs])
+    print(f"Best score: {clf_in.score(X[best_idxs], y[best_idxs])} on {len(train_idx) - len(best_idxs)} samples.")
+    # samples, rates, and scores are for plotting. Samples is for the x axis
+    return samples, rates, scores, best_idxs

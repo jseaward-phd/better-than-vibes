@@ -23,7 +23,7 @@ from prettytable import PrettyTable
 from tqdm import tqdm
 
 # BTV imports
-from ._src import prediction_info, fit_dknn_toXy, estimate_rateVSchance, estimate_info
+from ._src import prediction_info, fit_dknn_toXy, estimate_rateVSchance, estimate_info, class_balance_ratio
 
 
 # %%
@@ -129,7 +129,7 @@ def prune_by_info(
 
     """
     if clf is None:
-        info_mask = make_low_info_mask(X, y, metric=metric)
+        info_mask = make_low_info_mask(X, y, metric=metric, thresh=thresh)
     else:
         info = prediction_info(
             y,
@@ -381,46 +381,44 @@ def select_via_test_overlap(
 ######### Tests and Fine-Tuning Set Rankings #############
 
 
-def _cut_by_info_magnitude(
-    X_ft_list: Sequence[Data_Features],
+def _cut_by_class_balance(
     y_ft_list: Sequence[Label_Set],
-    test_info: float,
-    oom_margin: int = 1,
+    test_ratio: float,
+    tol: float = 1e-3,
     verbose=False,
     to_keep: Optional[Sequence[bool]] = None,
 ) -> Tuple[Sequence[bool], np.ndarray[float]]:
     """
-    Estimates the information for a sequence of fine tuning sets and sets
-    a value of False in to_keep if the total info is oom_margin orders of magnitude lower
-    than test_info. Skips calculation if there is a False at the index in to_keep.
+    Estimates the class balance for a sequence of fine tuning sets and sets
+    a value of False in to_keep if the ratio differs from test_ratio bt tol.
+    Skips calculation if there is a False at the index in to_keep.
 
     Returns
     -------
     to_keep : Sequence[bool]
         Fine-tune sets to keep.
-    info_rates : np.ndarray, dtype=float
+    class_bal_ratios : np.ndarray, dtype=float
 
     """
     if to_keep is None:
-        to_keep = [True] * len(X_ft_list)
-    info_amounts = np.zeros(len(X_ft_list))
-    oom_test = np.log10(test_info)
-    for i, (X, y) in tqdm(
-        enumerate(zip(X_ft_list, y_ft_list)),
-        desc="Estimating self-information rate...",
-        total=len(X_ft_list),
+        to_keep = [True] * len(y_ft_list)
+    class_bal_ratios = np.zeros(len(y_ft_list))
+    for i, y in tqdm(
+        enumerate(y_ft_list),
+        desc=f"Test class balance ratio is {test_ratio:0.5f}\nEstimating class balance ratio for fine tuning sets..",
+        total=len(y_ft_list),
     ):
         if to_keep[i]:
-            info = estimate_info(X, y)
-            if oom_test - np.log10(info) > oom_margin:
+            class_bal_ratio = class_balance_ratio(y)
+            if not np.isclose(class_bal_ratio, test_ratio, tol):
                 to_keep[i] = False
                 if verbose:
                     print(
-                        f"INFO: Dropping fine tuning set at index {i}. It has estimated info of {info:0.4f}"
+                        f"INFO: Dropping fine tuning set at index {i}. It has estimated class balance ratio of {class_bal_ratio:0.5f}"
                     )
             else:
                 info_amounts[i] = info
-    return to_keep, info_amounts
+    return to_keep, class_bal_ratios
 
 
 def _cut_by_info_rate(
@@ -691,14 +689,15 @@ def select_ft_sets(
     test_info = estimate_info(X_test, y_test)
     test_info_rate = estimate_rateVSchance(X_test, y_test)
     info_thresh = test_info_rate - test_info_rate * info_rate_tol
+    test_class_ratio = class_balance_ratio(y_test)
     if verbose:
         print(f"Information of test set estimated at {estimate_info:.5f}.")
         print(f"Information rate of test set estimated at {test_info_rate:.5f}.")
         print(
             f"Fine-tune sets must have an information rate of {info_thresh:.5f} for inclusion."
         )
-    to_keep, info_amounts = _cut_by_info_magnitude(
-        X_ft_list, y_ft_list, info_thresh, verbose=verbose
+    to_keep, info_amounts = _cut_by_class_balance(
+        y_ft_list, test_class_ratio, verbose=verbose
     )
     to_keep, info_rates = _cut_by_info_rate(
         X_ft_list, y_ft_list, info_thresh, verbose=verbose, to_keep=to_keep

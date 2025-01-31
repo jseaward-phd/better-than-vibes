@@ -26,8 +26,9 @@ from .custom_types import (
     Prediction_Set,
 )
 
-
-# from sklearn.base import BaseEstimator
+# Errors
+from sklearn.utils.validation import check_is_fitted
+from sklearn.exceptions import NotFittedError
 
 
 # %%
@@ -186,7 +187,7 @@ def estimate_info(
         if mean
         else prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
     )
-    return
+    return out
 
 
 def _chance_info(
@@ -257,13 +258,28 @@ def chance_info(
     Returns
     -------
     Union[np.ndarray,float,int]
-        Information remaining in the set given simple s tatistics.
+        Information remaining in the set given simple  statistics.
 
     """
     args = [y, class_num, use_freq]
     return _chance_info_multilabel(*args) if np.ndim(y) > 1 else _chance_info(*args)
 
+def class_balance_ratio(y:Label_Set)->float:
+    """
+    Ratio of total label information with statistics to that without.
+    Will be 1 if there are equal number of examples of each class.
+    
+    Parameters
+    ----------
+    y : Label_Set
 
+    Returns
+    -------
+    float
+    
+    """
+    return chance_info(y,use_freq=True)/chance_info(y,use_freq=False)
+    
 def _extraction_rateVSchance(X, y, _clf, use_freq: bool = True) -> float:
     info_baseline = chance_info(y, use_freq=use_freq)
     info = prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
@@ -307,7 +323,15 @@ def estimate_rateVSchance(
         Percentage of the inforamtion in the dataset (X,y) which clf has learned.
 
     """
-    _clf = fit_dknn_toXy(X, y, metric=metric, self_exclude=True) if clf is None else clf
+    if clf is None:
+        _clf = fit_dknn_toXy(X, y, metric=metric, self_exclude=True)  
+    else:
+        try:
+            check_is_fitted(clf)
+        except NotFittedError:
+            print("Please fit clf before passing.")
+            return
+        _clf = clf
     return _extraction_rateVSchance(X, y, _clf, use_freq)
 
 
@@ -347,6 +371,12 @@ def model_extraction_rate(
 
     """
     assert n > 0
+
+    try:
+        check_is_fitted(clf)
+    except NotFittedError:
+        print("Please fit clf before passing.")
+        return
     A = []
     _clf = clf if refit else deepcopy(clf)
 
@@ -400,6 +430,11 @@ def order_folds(
     """
     # reverse = True sorts highest to lowest, so prioratize the training data that the model, as provided, knows the least about.
     Is = []
+    try:
+        check_is_fitted(clf)
+    except NotFittedError:
+        print("Please fit clf before passing.")
+        return
     for idxs in fold_idxs:
         y_predicted = (
             clf.predict_proba(X.iloc[idxs])
