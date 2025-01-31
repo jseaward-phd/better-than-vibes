@@ -385,8 +385,6 @@ def select_via_test_overlap(
 
 
 ######### Tests and Fine-Tuning Set Rankings #############
-
-
 def _cut_by_class_balance(
     y_ft_list: Sequence[Label_Set],
     test_ratio: float,
@@ -411,7 +409,7 @@ def _cut_by_class_balance(
     class_bal_ratios = np.zeros(len(y_ft_list))
     for i, y in tqdm(
         enumerate(y_ft_list),
-        desc=f"Test class balance ratio is {test_ratio:0.5f}\nEstimating class balance ratio for fine tuning sets..",
+        desc=f"Estimating class balance ratio for fine tuning sets..",
         total=len(y_ft_list),
     ):
         if to_keep[i]:
@@ -423,7 +421,7 @@ def _cut_by_class_balance(
                         f"INFO: Dropping fine tuning set at index {i}. It has estimated class balance ratio of {class_bal_ratio:0.5f}"
                     )
             else:
-                info_amounts[i] = info
+                class_bal_ratios[i] = class_bal_ratio
     return to_keep, class_bal_ratios
 
 
@@ -620,9 +618,7 @@ def rank_by_scores(
             tab.title = f"{var_names[metric_idx]}"
             tab.add_column("Input index", np.arange(len(score_lists[0])))
             tab.add_column("Rank", sort_idx.argsort() + 1)
-            tab.add_column(
-                "Value", score_lists[metric_idx] * -1 * big_first[metric_idx]
-            )
+            tab.add_column("Value", score_lists[metric_idx] * big_first[metric_idx])
             print(tab)
     if verbose:
         print("Values of 0.0 indicate a dataset excluded during the threshold checks.")
@@ -632,11 +628,11 @@ def rank_by_scores(
 
 
 def select_ft_sets(
-    X_train: Data_Features,
     X_ft_list: Sequence[Data_Features],
     y_ft_list: Sequence[Label_Set],
     X_test: Sequence[Data_Features],
     y_test: Sequence[Label_Set],
+    X_train: Optional[Data_Features] = None,
     verbose: bool = True,
     return_sorted: bool = True,
     info_rate_tol: float = 0.03,
@@ -646,12 +642,10 @@ def select_ft_sets(
 ]:
     """
     Packaged routine to select fine tuning sets, given a test set, and assuming
-    training was alreadyperformed on (X_tran,y_train).
+    training was already performed on (X_tran,y_train).
 
     Parameters
     ----------
-    X_train : Data_Features
-        Train set features.
     X_ft_list : Sequence[Data_Features]
         Sequence of features from the fine tuning sets to select between.
     y_ft_list : Sequence[Label_Set]
@@ -659,7 +653,9 @@ def select_ft_sets(
     X_test : Sequence[Data_Features]
         Test set features.
     y_test : Sequence[Label_Set]
-        TEst set labels.
+        Test set labels.
+    X_train : Optional[Data_Features], optional
+        Train set features. The default is None.
     verbose : bool, optional
         Whether to print notices and warnings. The default is True.
     return_sorted : bool, optional
@@ -677,18 +673,18 @@ def select_ft_sets(
     Returns
     -------
     if return sorted:
-        X_ft_list[ranking] : Sequence[Data_Features]
+        X_ft_list[sort_idx] : Sequence[Data_Features]
             Sorted fintuning features
 
-        y_ft_list[ranking] : Sequence[Label_Set]
+        y_ft_list[sort_idx] : Sequence[Label_Set]
             Sorted fine tuning labels
 
-        ranking : Sequence[int]
-             Sequence which will sort the fine tuning sets provided.
+        sort_idx : Sequence[int]
+             Sequence which will sort the fine tuning sets provided best to worst.
 
     else:
-       ranking : Sequence[int]
-            Sequence which will sort the fine tuning sets provided.
+       sort_idx : Sequence[int]
+            Sequence which will sort the fine tuning sets provided best to worst.
 
     """
     global test_overlaps, info_rates, train_overflows  # makes the PrettyTables titles work
@@ -697,12 +693,13 @@ def select_ft_sets(
     info_thresh = test_info_rate - test_info_rate * info_rate_tol
     test_class_ratio = class_balance_ratio(y_test)
     if verbose:
-        print(f"Information of test set estimated at {estimate_info:.5f}.")
+        print(f"Test set class balance ratio is {test_class_ratio:.5f}.")
+        print(f"Information of test set estimated at {test_info:.5f}.")
         print(f"Information rate of test set estimated at {test_info_rate:.5f}.")
         print(
             f"Fine-tune sets must have an information rate of {info_thresh:.5f} for inclusion."
         )
-    to_keep, info_amounts = _cut_by_class_balance(
+    to_keep, class_bal_ratios = _cut_by_class_balance(
         y_ft_list, test_class_ratio, verbose=verbose
     )
     to_keep, info_rates = _cut_by_info_rate(
@@ -711,13 +708,16 @@ def select_ft_sets(
     to_keep, test_overlaps = _cut_by_test_overlap(
         X_ft_list, X_test, overlap_thresh, verbose=verbose, to_keep=to_keep
     )
-    train_overflows = _overflow_from_train(X_train, X_ft_list, to_keep=to_keep)
-    ranking = rank_by_scores(
+    if X_train is not None:
+        train_overflows = _overflow_from_train(X_train, X_ft_list, to_keep=to_keep)
+    sort_idx = rank_by_scores(
         test_overlaps, info_rates, train_overflows, to_keep=to_keep
     )
     if return_sorted:
-        return X_ft_list[ranking], y_ft_list[ranking], ranking
-    return ranking
+        X_ft_list = [X_ft_list[i] for i in sort_idx if i >= 0]
+        y_ft_list = [y_ft_list[i] for i in sort_idx if i >= 0]
+        return X_ft_list, y_ft_list, sort_idx
+    return sort_idx
 
 
 ##### Utilies #####

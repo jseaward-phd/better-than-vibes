@@ -174,7 +174,7 @@ def cal_info_about_test_set_in_finetune_set(
 
 
 def order_samples_by_info(
-    X, y, clf, reverse=True, sort_info=False
+    X, y, clf, reverse=True, sort_info=False, index_only=True
 ):  # reverse = True sorts highest to lowest, so prioratize the training data that the model, as provided, knows the least about.
 
     y_predicted = clf.predict_proba(X)
@@ -205,6 +205,8 @@ def order_samples_by_info(
         info.sort()
     if reverse:
         info = info[::-1]
+    if index_only:
+        return np.argsort(info)
     return sorted_X, np.array(sorted_y), info
 
 
@@ -292,7 +294,7 @@ def train_best_fold_first_test(
     clf_in,
     n_splits=100,
     verbose=False,
-    tol=10,
+    patience=15,  # batches
     test_idx: Union[Sequence[int], DataFrame] = None,
 ):  # should do some without stratification to show the difference. Should try selecting training set with info (as justged by inital clf) equal to ignorance in test set (ditto)
     clf = deepcopy(clf_in)
@@ -320,8 +322,7 @@ def train_best_fold_first_test(
         clf.fit(X[idx0], y[idx0])
     iters = len(running_train)
     best_idxs = []
-    last_best_k = 0
-    best_r = 0
+    last_best_k, best_score = 0, 0
 
     for k in trange(iters):
         best_fold_idxs = order_folds(X, y, clf, running_train)[0]
@@ -331,10 +332,10 @@ def train_best_fold_first_test(
         clf.fit(X[train_idx], y[train_idx])
         r = estimate_rateVSchance(X[running_test], y_true, clf=clf)
         score = clf.score(X[running_test], y_true)
-        if r > best_r:
+        if score > best_score:
             best_idxs = train_idx
             last_best_k = k
-            best_r = r
+            best_score = score
         rates.append(r)
         scores.append(score)
         samples.append(len(train_idx))
@@ -344,15 +345,13 @@ def train_best_fold_first_test(
                 f"Train samples : {len(train_idx)}",
                 f"Score : {score}",
             )
-        if k - last_best_k >= tol:
+        if k - last_best_k >= patience:
             print(
                 f"No improvement in information rate found after adding {k - last_best_k} folds ({len(train_idx) - len(best_idxs)} samples). Fitting on {last_best_k} folds, {len(best_idxs)} smaples."
             )
             break
 
     clf_in.fit(X[best_idxs], y[best_idxs])
-    print(
-        f"Best score: {clf_in.score(X[best_idxs], y[best_idxs])} on {len(train_idx) - len(best_idxs)} samples."
-    )
+    print(f"Best score: {clf.score(X[running_test], y_true)} on internal test set.")
     # samples, rates, and scores are for plotting. Samples is for the x axis
     return samples, rates, scores, best_idxs
