@@ -23,7 +23,13 @@ from prettytable import PrettyTable
 from tqdm import tqdm
 
 # BTV imports
-from ._src import prediction_info, fit_dknn_toXy, estimate_rateVSchance, estimate_info, class_balance_ratio
+from ._src import (
+    prediction_info,
+    fit_dknn_toXy,
+    estimate_rateVSchance,
+    estimate_info,
+    class_balance_ratio,
+)
 
 
 # %%

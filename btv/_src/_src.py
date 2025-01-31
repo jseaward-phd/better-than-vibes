@@ -264,11 +264,12 @@ def chance_info(
     args = [y, class_num, use_freq]
     return _chance_info_multilabel(*args) if np.ndim(y) > 1 else _chance_info(*args)
 
-def class_balance_ratio(y:Label_Set)->float:
+
+def class_balance_ratio(y: Label_Set) -> float:
     """
     Ratio of total label information with statistics to that without.
     Will be 1 if there are equal number of examples of each class.
-    
+
     Parameters
     ----------
     y : Label_Set
@@ -276,10 +277,11 @@ def class_balance_ratio(y:Label_Set)->float:
     Returns
     -------
     float
-    
+
     """
-    return chance_info(y,use_freq=True)/chance_info(y,use_freq=False)
-    
+    return chance_info(y, use_freq=True) / chance_info(y, use_freq=False)
+
+
 def _extraction_rateVSchance(X, y, _clf, use_freq: bool = True) -> float:
     info_baseline = chance_info(y, use_freq=use_freq)
     info = prediction_info(y, _clf.predict_proba(X), discount_chance=False).sum()
@@ -324,7 +326,7 @@ def estimate_rateVSchance(
 
     """
     if clf is None:
-        _clf = fit_dknn_toXy(X, y, metric=metric, self_exclude=True)  
+        _clf = fit_dknn_toXy(X, y, metric=metric, self_exclude=True)
     else:
         try:
             check_is_fitted(clf)

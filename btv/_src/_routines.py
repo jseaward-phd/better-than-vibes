@@ -15,7 +15,13 @@ from copy import deepcopy
 from tqdm import trange, tqdm
 from matplotlib import pyplot as plt
 
-from ._src import prediction_info, fit_dknn_toXy, estimate_rateVSchance, order_folds, chance_info
+from ._src import (
+    prediction_info,
+    fit_dknn_toXy,
+    estimate_rateVSchance,
+    order_folds,
+    chance_info,
+)
 from ._selection import prune_by_info
 
 from sklearn.utils.validation import check_is_fitted
@@ -57,50 +63,54 @@ def pick_nearest2test(
     )
     return train0_idxs
 
-def scan_info_thresh(    
+
+def scan_info_thresh(
     X_train: Data_Features,
     y_train: Label_Set,
     X_test: Data_Features,
     y_test: Label_Set,
     clf,
-    max_info:Union[int,float]=1,
-    info_steps:int=100,
-    plot = True,
-    score_metric = "Accuracy",
+    max_info: Union[int, float] = 1,
+    info_steps: int = 100,
+    plot=True,
+    score_metric="Accuracy",
     keep_hull=False,
-)->Tuple[list[float],list[int],float]:
+) -> Tuple[list[float], list[int], float]:
     scores, lengths = [], []
-    thresholds = np.arange(0,max_info,max_info/info_steps)
+    thresholds = np.arange(0, max_info, max_info / info_steps)
     for th in tqdm(thresholds, desc="Scanning information threshold..."):
-        idx_pruned = prune_by_info(X_train,y_train,thresh=th,keep_hull=keep_hull)
+        idx_pruned = prune_by_info(X_train, y_train, thresh=th, keep_hull=keep_hull)
         if len(idx_pruned) == 0:
-            while len(lengths)<info_steps:
+            while len(lengths) < info_steps:
                 lengths.append(0)
                 scores.append(0)
             print(f"INFO: No points remaining with info>={th}.")
             break
-        clf.fit(X_train[idx_pruned],y_train[idx_pruned])
-        lengths.append(len(idx_pruned)/len(y_train))
-        scores.append(clf.score(X_test,y_test))
-    
+        clf.fit(X_train[idx_pruned], y_train[idx_pruned])
+        lengths.append(len(idx_pruned) / len(y_train))
+        scores.append(clf.score(X_test, y_test))
+
     if plot:
-        plt.xlabel('Information threshold [bits]')
+        plt.xlabel("Information threshold [bits]")
         plt.title("Classification score with decresing training set information")
-        score_line = plt.plot(thresholds,scores, label="Score")
+        score_line = plt.plot(thresholds, scores, label="Score")
         ax1 = plt.gca()
         ax1.set_ylabel(f"Score ({score_metric})")
-        
+
         ax2 = ax1.twinx()
-        length_line = ax2.plot(thresholds,lengths, color="g", label="Train set size")
+        length_line = ax2.plot(thresholds, lengths, color="g", label="Train set size")
         ax2.set_ylabel("Fraction of training set used")
 
         lines = score_line + length_line
         lbls = [x.get_label() for x in lines]
         plt.legend(lines, lbls)
-        
+
         plt.show()
-        print(f"Max score of {max(scores):0.5f} at threshold of {thresholds[np.argmax(scores)]}.")
+        print(
+            f"Max score of {max(scores):0.5f} at threshold of {thresholds[np.argmax(scores)]}."
+        )
     return scores, lengths, thresholds[np.argmax(scores)]
+
 
 def cal_info_about_test_set_in_finetune_set(
     X_train: Data_Features,
@@ -277,9 +287,15 @@ def add_best_fold_first_test(
 
 
 def train_best_fold_first_test(
-    X, y, clf_in, n_splits=100, verbose=False, tol=10, test_idx:Union[Sequence[int],DataFrame]=None,
+    X,
+    y,
+    clf_in,
+    n_splits=100,
+    verbose=False,
+    tol=10,
+    test_idx: Union[Sequence[int], DataFrame] = None,
 ):  # should do some without stratification to show the difference. Should try selecting training set with info (as justged by inital clf) equal to ignorance in test set (ditto)
-    clf =deepcopy(clf_in)
+    clf = deepcopy(clf_in)
     kfold_idx_gen = StratifiedKFold(n_splits=n_splits).split(X, y)
     train_idx = np.array([], int)
     running_train, rates, train_idx, scores, samples = [], [], [], [], []
@@ -335,6 +351,8 @@ def train_best_fold_first_test(
             break
 
     clf_in.fit(X[best_idxs], y[best_idxs])
-    print(f"Best score: {clf_in.score(X[best_idxs], y[best_idxs])} on {len(train_idx) - len(best_idxs)} samples.")
+    print(
+        f"Best score: {clf_in.score(X[best_idxs], y[best_idxs])} on {len(train_idx) - len(best_idxs)} samples."
+    )
     # samples, rates, and scores are for plotting. Samples is for the x axis
     return samples, rates, scores, best_idxs
