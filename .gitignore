@@ -5,12 +5,15 @@ __pycache__
 data/*
 runs/*
 PyTorchVAE/
-vae_module.py
+*_module.py
+data_img.py
+*analysis*.ipynb
 
 ## tools for me
 utils.py
 clustering.py
-*.md
+text.md
+scratch*.npy
 
 ## intermediate test data/results
 *.pkl

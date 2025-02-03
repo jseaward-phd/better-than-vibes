@@ -5,3 +5,4 @@ pandas
 openml
 tqdm
 jupyter
+matplotlib
