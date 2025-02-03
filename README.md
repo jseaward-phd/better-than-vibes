@@ -8,13 +8,11 @@ Clone the repo and switch to the directory:
 ```
 git clone https://github.com/jseaward-phd/better-than-vibes.git ;
 cd better-than-vibes
-
 ```
 
 Activate (or create) the virtual environment you want to use these tools with. 
 
 Then install the requirements.
-
 ```
 pip install -r requirements.txt
 ```
