@@ -1,0 +1,28 @@
+## bytecode files
+__pycache__
+
+## stuff for extension to image embeddings
+data/*
+runs/*
+PyTorchVAE/
+*_module.py
+data_img.py
+*analysis*.ipynb
+
+## tools for me
+utils.py
+clustering.py
+text.md
+scratch*.npy
+
+## intermediate test data/results
+*.pkl
+*.pt
+
+## auotsaves
+*~
+.ipynb_checkpoints/
+
+## spyder files
+.spyproject/*
+.virtual_documents/
